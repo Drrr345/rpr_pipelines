@@ -20,7 +20,7 @@ def setDumpCapture(Map options, String settingsPath, String dumpPath) {
         def settingsTCP = readJSON(file: settingsPath)
         settingsTCP.Display.EnableDump = options.shouldCollectDumps
         settingsTCP.Display.DumpPath = dumpPath
-        JSON serializedJson = JSONSerializer.toJSON(settings_TCP, new JsonConfig())
+        JSON serializedJson = JSONSerializer.toJSON(settingsTCP, new JsonConfig())
         writeJSON(file: settingsPath, json: serializedJson, pretty: 4)
     } catch (e) {
         println("[ERROR] Failed to set Dump collection")
