@@ -14,6 +14,20 @@ import TestsExecutionType
 @Field final List WEEKLY_REGRESSION_CONFIGURATION = ["HeavenDX11", "HeavenOpenGL", "ValleyDX11", "ValleyOpenGL", "Dota2Vulkan"]
 
 
+// Set StreamingSdk dumps collection in settings_TCP.json
+def setDumpCapture(Map options, String settingsPath, String dumpPath) {
+    try {
+        def settingsTCP = readJSON(file: settingsPath)
+        settingsTCP.Display.EnableDump = options.shouldCollectDumps
+        settingsTCP.Display.DumpPath = dumpPath
+        JSON serializedJson = JSONSerializer.toJSON(settings_TCP, new JsonConfig())
+        writeJSON(file: settingsPath, json: serializedJson, pretty: 4)
+    } catch (e) {
+        println("[ERROR] Failed to set Dump collection")
+        throw e
+    }
+}
+
 String getClientLabels(Map options) {
     return "${options.osName} && ${options.TESTER_TAG} && ${options.CLIENT_TAG}"
 }
@@ -1320,6 +1334,11 @@ def executePreBuild(Map options) {
                     Android testing build name was updated: ${options.androidTestingBuildName}
                 """
             }
+
+            // Collect StreamingSdk dumps //"jobs/Configs/settings_TCP.json"
+            if (options.shouldCollectDumps) {
+                setDumpCapture(options, "Configs/settings_TCP.json", "./streaming_sdk_dump.dmp")
+            }
         }
 
         if (!options.tests && options.testsPackage == "none") {
@@ -1658,6 +1677,7 @@ def call(String projectBranch = "",
     Boolean clientCollectTraces = false,
     Boolean serverCollectTraces = false,
     String collectTracesType = "AfterTests",
+    Boolean shouldCollectDumps = true,
     String games = "Valorant",
     String androidBuildConfiguration = "release,debug",
     String androidTestingBuildName = "debug",
@@ -1751,6 +1771,7 @@ def call(String projectBranch = "",
                         clientCollectTraces:clientCollectTraces,
                         serverCollectTraces:serverCollectTraces,
                         collectTracesType:collectTracesType,
+                        shouldCollectDumps:shouldCollectDumps,
                         storeOnNAS: storeOnNAS,
                         finishedBuildStages: new ConcurrentHashMap(),
                         isDevelopBranch: isDevelopBranch
