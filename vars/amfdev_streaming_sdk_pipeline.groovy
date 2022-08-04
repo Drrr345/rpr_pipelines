@@ -1337,7 +1337,7 @@ def executePreBuild(Map options) {
 
             // Collect StreamingSdk dumps //"jobs/Configs/settings_TCP.json"
             if (options.shouldCollectDumps) {
-                setDumpCapture(options, "Configs/settings_TCP.json", "./streaming_sdk_dump.dmp")
+                setDumpCapture(options, "jobs/Configs/settings_TCP.json", "./streaming_sdk_dump.dmp")
             }
         }
 
