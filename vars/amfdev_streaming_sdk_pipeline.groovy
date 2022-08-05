@@ -1613,7 +1613,15 @@ def executeDeploy(Map options, List platformList, List testResultList, String ga
 
             //if (options.shouldCollectDumps && jobs_test_streaming_sdk(fileExists('*.dmp'))){}
             try {
+                
+                def dirOutput = bat returnStdout: true, script: "dir \".\""
+                println(dirOutput)
+
                 dir("jobs_test_streaming_sdk") {
+
+                    def dirOutput2 = bat returnStdout: true, script: "dir \".\""
+                    println(dirOutput2)
+
                     String DUMPS_ZIP_NAME = "dumps.zip"
                     zip archive: true, glob: '*.dmp', zipFile: "${DUMPS_ZIP_NAME}"
                     archiveArtifacts artifacts: "${DUMPS_ZIP_NAME}"
