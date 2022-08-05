@@ -1611,6 +1611,21 @@ def executeDeploy(Map options, List platformList, List testResultList, String ga
                 """
             }
 
+            try {
+                    String DUMPS_ZIP_NAME = "dumps.zip"
+
+                    //bat("%CIS_TOOLS%\\7-Zip\\7z.exe a ${DUMPS_ZIP_NAME} *.dmp -r")
+                    zip archive: true, glob: '*.dmp', zipFile: "${DUMPS_ZIP_NAME}"
+
+                    archiveArtifacts artifacts: "${DUMPS_ZIP_NAME}"
+                }
+            } catch(e) {
+                println """
+                    [ERROR] during archiving ${DUMPS_ZIP_NAME}
+                    ${e.toString()}
+                """
+            }
+
             Map summaryTestResults = [:]
             try {
                 def summaryReport = readJSON file: 'summaryTestResults/summary_status.json'
