@@ -1618,7 +1618,6 @@ def executeDeploy(Map options, List platformList, List testResultList, String ga
                     zip archive: true, glob: '*.dmp', zipFile: "${DUMPS_ZIP_NAME}"
 
                     archiveArtifacts artifacts: "${DUMPS_ZIP_NAME}"
-                }
             } catch(e) {
                 println """
                     [ERROR] during archiving ${DUMPS_ZIP_NAME}
