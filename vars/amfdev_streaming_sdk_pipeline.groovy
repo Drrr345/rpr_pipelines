@@ -1613,18 +1613,15 @@ def executeDeploy(Map options, List platformList, List testResultList, String ga
 
             //if (options.shouldCollectDumps && jobs_test_streaming_sdk(fileExists('*.dmp'))){}
             try {
-                
-                def tmpDmpSearch = findFiles(glob: "*.dmp")
-                println(tmpDmpSearch[0].path)
 
                 def dirOutput = bat returnStdout: true, script: "dir \".\""
                 println(dirOutput)
-
 
                 dir("jobs_test_streaming_sdk") {
 
                     def dirOutput2 = bat returnStdout: true, script: "dir \".\""
                     println(dirOutput2)
+
                     def allDmpFiles = findFiles(glob: "*.dmp")
                     for (dmpFile in allDmpFiles) {
                         bat(script: "CACLS ${dmpFile.path} /e /p ${env.USERNAME}:f")
@@ -1639,7 +1636,7 @@ def executeDeploy(Map options, List platformList, List testResultList, String ga
                 }
             } catch(e) {
                 println """
-                    [ERROR] during archiving ${DUMPS_ZIP_NAME}
+                    [ERROR] during archiving dumps.zip
                     ${e.toString()}
                 """
             }
