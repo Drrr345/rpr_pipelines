@@ -19,10 +19,10 @@ def setDumpCapture(Map options, String settingsPath) {
     try {
         def settingsTCP = readJSON(file: settingsPath)
         settingsTCP.Display.EnableDump = options.shouldCollectDumps
-        settingsTCP.Display.DumpPath = options.serverDumpPath
+        settingsTCP.Display.DumpPath = options.stageName
         JSON serializedJson = JSONSerializer.toJSON(settingsTCP, new JsonConfig())
         writeJSON(file: settingsPath, json: serializedJson, pretty: 4)
-        println("[INFO] Add dump parameters to:${settingsPath}")
+        println("[INFO] Add dump parameters to: ${settingsPath}")
     } catch (e) {
         println("[ERROR] Failed to set Dump collection")
         throw e
@@ -1616,7 +1616,7 @@ def executeDeploy(Map options, List platformList, List testResultList, String ga
             try {
                 if (options.shouldCollectDumps)
                 {
-                    def settingsTCP = readJSON(file: settingsPath)
+                    def settingsTCP = readJSON(file: "jobs_test_streaming_sdk/jobs/Configs/settings_TCP.json")
                     println(settingsTCP.Display.EnableDump)
                     println(settingsTCP.Display.DumpPath)
 
@@ -1640,10 +1640,8 @@ def executeDeploy(Map options, List platformList, List testResultList, String ga
                     }
                 }
             } catch(e) {
-                println """
-                    [ERROR] during archiving dumps.zip
-                    ${e.toString()}
-                """
+                println("[ERROR] during archiving dumps.zip")
+                throw e
             }
 
             Map summaryTestResults = [:]
@@ -1806,7 +1804,7 @@ def call(String projectBranch = "",
                         serverCollectTraces:serverCollectTraces,
                         collectTracesType:collectTracesType,
                         shouldCollectDumps: true,
-                        serverDumpPath: stageName
+                        serverDumpPath: "",
                         storeOnNAS: storeOnNAS,
                         finishedBuildStages: new ConcurrentHashMap(),
                         isDevelopBranch: isDevelopBranch
