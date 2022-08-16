@@ -17,9 +17,31 @@ import TestsExecutionType
 // Set StreamingSdk dumps collection in settings_TCP.json
 def setDumpCapture(Map options, String settingsPath) {
     try {
+        //String dumpPath = "${WORKSPACE}\\..\\..\\..\\users\\${env.USERNAME}\\AppData\\Local\\Temp"
+        dir("${WORKSPACE}"){
+            bat """
+                dir "."
+            """
+            if (!fileExists("dumps")){
+                powershell """
+                    mkdir -p dumps
+                """
+                bat """
+                    dir "dumps"
+                """
+            }
+            bat """
+                dir "."
+            """
+        }
+
+        dir(options.serverDumpPath){
+            println("[INFO] Dump path verify: ${options.serverDumpPath}")
+        }
+
         def settingsTCP = readJSON(file: settingsPath)
         settingsTCP.Display.EnableDump = options.shouldCollectDumps
-        settingsTCP.Display.DumpPath = options.stageName
+        settingsTCP.Display.DumpPath = options.serverDumpPath
         JSON serializedJson = JSONSerializer.toJSON(settingsTCP, new JsonConfig())
         writeJSON(file: settingsPath, json: serializedJson, pretty: 4)
         println("[INFO] Add dump parameters to: ${settingsPath}")
@@ -436,6 +458,7 @@ def saveResults(String osName, Map options, String executionType, Boolean stashR
                         makeStash(includes: '**/*.json', name: "${options.testResultsName}_server", allowEmpty: true, storeOnNAS: options.storeOnNAS)
                         makeStash(includes: '**/*.jpg,**/*.webp,**/*.mp4', name: "${options.testResultsName}_and_cl", allowEmpty: true, storeOnNAS: options.storeOnNAS)
                         makeStash(includes: '**/*_server.zip', name: "${options.testResultsName}_ser_t", allowEmpty: true, storeOnNAS: options.storeOnNAS)
+
                     }
                 }
 
@@ -637,6 +660,12 @@ def executeTestsServer(String osName, String asicName, Map options) {
         println("Server is synchronized with state of client. Start tests")
 
         withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.EXECUTE_TESTS) {
+            // Collect StreamingSdk dumps
+            if (options.shouldCollectDumps) {
+                setDumpCapture(options, "jobs/Configs/settings_TCP.json")
+                println("[INFO] executeTestsServer -> setDumpCapture #1")
+            }
+
             executeTestCommand(osName, asicName, options, "server")
         }
 
@@ -664,6 +693,24 @@ def executeTestsServer(String osName, String asicName, Map options) {
         saveResults(osName, options, "server", stashResults, options["serverInfo"]["executeTestsFinished"])
 
         closeGames(osName, options, options.engine)
+
+        if (options.shouldCollectDumps) {
+            def settingsTCPchk = readJSON(file: "jobs/Configs/settings_TCP.json")
+            println("settingsTCP.EnableDump: ${settingsTCPchk.Display.EnableDump}")
+            println("settingsTCP.DumpPath: ${settingsTCPchk.Display.DumpPath}")
+
+            //setDumpCapture(options, "jobs/Configs/settings_TCP.json")
+
+            String DUMPS_ZIP_NAME = "dumps.zip"
+
+            def dirCheck = bat returnStdout: true, script: "dir \".\""
+            def dirCheck2 = bat returnStdout: true, script: "dir dumps"
+            println("[INFO] dump dir check")
+            println(dirCheck)
+            println(dirCheck2)
+            zip archive: false, dir: "dumps", zipFile: "${DUMPS_ZIP_NAME}"
+            archiveArtifacts artifacts: "${DUMPS_ZIP_NAME}"
+        }
     }
 }
 
@@ -875,6 +922,12 @@ def executeTestsAndroid(String osName, String asicName, Map options) {
 def executeTests(String osName, String asicName, Map options) {
     // used for mark stash results or not. It needed for not stashing failed tasks which will be retried.
     Boolean stashResults = true
+
+    // Collect StreamingSdk dumps
+    if (options.shouldCollectDumps) {
+        setDumpCapture(options, "jobs/Configs/settings_TCP.json")
+        println("[INFO] executeTests -> setDumpCapture #1")
+    }
 
     try {
         options.parsedTests = options.tests.split("-")[0]
@@ -1335,11 +1388,6 @@ def executePreBuild(Map options) {
                     Android testing build name was updated: ${options.androidTestingBuildName}
                 """
             }
-
-            // Collect StreamingSdk dumps //"jobs/Configs/settings_TCP.json"
-            if (options.shouldCollectDumps) {
-                setDumpCapture(options, "jobs/Configs/settings_TCP.json")
-            }
         }
 
         if (!options.tests && options.testsPackage == "none") {
@@ -1612,38 +1660,6 @@ def executeDeploy(Map options, List platformList, List testResultList, String ga
                 """
             }
 
-            //if (options.shouldCollectDumps && jobs_test_streaming_sdk(fileExists('*.dmp'))){}
-            try {
-                if (options.shouldCollectDumps)
-                {
-                    def settingsTCP = readJSON(file: "jobs_test_streaming_sdk/jobs/Configs/settings_TCP.json")
-                    println(settingsTCP.Display.EnableDump)
-                    println(settingsTCP.Display.DumpPath)
-
-                    dir(settingsTCP.Display.DumpPath) {
-                        def dirOutput = bat returnStdout: true, script: "dir \".\""
-                        println(dirOutput)
-                        def prevDirOutput = bat returnStdout: true, script: "dir \"..\""
-                        println(prevDirOutput)
-
-                        def allDmpFiles = findFiles(glob: "*.dmp")
-                        for (dmpFile in allDmpFiles) {
-                            bat(script: "CACLS ${dmpFile.path} /e /p ${env.USERNAME}:f")
-                        }
-                        def dirOutput3 = bat returnStdout: true, script: "dir \".\""
-                        println(dirOutput3)
-
-                        String DUMPS_ZIP_NAME = "dumps.zip"
-
-                        zip archive: true, glob: '*.dmp', zipFile: "${DUMPS_ZIP_NAME}"
-                        archiveArtifacts artifacts: "${DUMPS_ZIP_NAME}"
-                    }
-                }
-            } catch(e) {
-                println("[ERROR] during archiving dumps.zip")
-                throw e
-            }
-
             Map summaryTestResults = [:]
             try {
                 def summaryReport = readJSON file: 'summaryTestResults/summary_status.json'
@@ -1804,7 +1820,7 @@ def call(String projectBranch = "",
                         serverCollectTraces:serverCollectTraces,
                         collectTracesType:collectTracesType,
                         shouldCollectDumps: true,
-                        serverDumpPath: "",
+                        serverDumpPath: "..\\dumps",
                         storeOnNAS: storeOnNAS,
                         finishedBuildStages: new ConcurrentHashMap(),
                         isDevelopBranch: isDevelopBranch
