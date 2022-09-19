@@ -506,17 +506,6 @@ def saveResults(String osName, Map options, String executionType, Boolean stashR
                         makeStash(includes: '**/*_server.zip', name: "${options.testResultsName}_ser_t", allowEmpty: true, storeOnNAS: options.storeOnNAS)
                     }
                 }
-
-                // number of errors > 50% -> do retry
-                if (sessionReport.summary.total * 0.5 < sessionReport.summary.error) {
-                    String errorMessage
-                    if (options.currentTry < options.nodeReallocateTries) {
-                        errorMessage = "Many tests were marked as error. The test group will be restarted."
-                    } else {
-                        errorMessage = "Many tests were marked as error."
-                    }
-                    throw new ExpectedExceptionWrapper(errorMessage, new Exception(errorMessage))
-                }
             }
         }
     } catch(e) {
