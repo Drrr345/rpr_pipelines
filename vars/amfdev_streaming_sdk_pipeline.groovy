@@ -1799,7 +1799,8 @@ def call(String projectBranch = "",
     String games = "Valorant",
     String androidBuildConfiguration = "release,debug",
     String androidTestingBuildName = "debug",
-    Boolean storeOnNAS = false
+    Boolean storeOnNAS = false,
+    String driverVersion = ""
     )
 {
     ProblemMessageManager problemMessageManager = new ProblemMessageManager(this, currentBuild)
@@ -1892,6 +1893,7 @@ def call(String projectBranch = "",
                         storeOnNAS: storeOnNAS,
                         finishedBuildStages: new ConcurrentHashMap(),
                         isDevelopBranch: isDevelopBranch
+                        driverVersion: driverVersion
                         ]
         }
 
