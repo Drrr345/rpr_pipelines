@@ -228,7 +228,8 @@ def executeTests(String osName, String asicName, Map options)
 
                     if (options.engine == "HybridPro") {
                         dir("C:\\Program Files\\AMD\\RadeonProRenderPlugins\\Maya\\bin") {
-                            downloadFiles("/volume1/CIS/rpr-plugins/RPRMaya", ".")
+                            bat "del HybridPro.dll"
+                            downloadFiles("/volume1/CIS/rpr-plugins/RPRMaya/HybridPro.dll", ".")
                         }
                     }
                 }
