@@ -225,6 +225,12 @@ def executeTests(String osName, String asicName, Map options)
                     getProduct(osName, options)
                     newPluginInstalled = installMSIPlugin(osName, "Maya", options)
                     println "[INFO] Install function on ${env.NODE_NAME} return ${newPluginInstalled}"
+
+                    if (options.engine == "HybridPro") {
+                        dir("C:\\Program Files\\AMD\\RadeonProRenderPlugins\\Maya\\bin") {
+                            downloadFiles("/volume1/CIS/rpr-plugins/RPRMaya", ".")
+                        }
+                    }
                 }
             }
 
