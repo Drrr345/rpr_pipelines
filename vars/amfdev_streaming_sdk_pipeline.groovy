@@ -955,6 +955,7 @@ def executeTests(String osName, String asicName, Map options) {
     Boolean stashResults = true
 
     try {
+        amdDriverUpdate(false, options.platforms, options.TESTER_TAG, options.driverVersion)
         if (osName == "Windows" || osName == "Ubuntu20") {
             options["clientInfo"] = new ConcurrentHashMap()
             options["serverInfo"] = new ConcurrentHashMap()
@@ -1892,7 +1893,7 @@ def call(String projectBranch = "",
                         collectTracesType:collectTracesType,
                         storeOnNAS: storeOnNAS,
                         finishedBuildStages: new ConcurrentHashMap(),
-                        isDevelopBranch: isDevelopBranch
+                        isDevelopBranch: isDevelopBranch,
                         driverVersion: driverVersion
                         ]
         }

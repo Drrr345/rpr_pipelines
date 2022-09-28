@@ -210,7 +210,6 @@ def executeTestsNode(String osName, String gpuNames, String buildProfile, def ex
 
                                 def retringFunction = { nodesList, currentTry ->
                                     try {
-                                        amdDriverUpdate(options.platforms, options.TESTER_TAG, options.driverVersion)
                                         executeTests(osName, asicName, newOptions)
                                     } catch(Exception e) {
                                         // save expected exception message for add it in report
