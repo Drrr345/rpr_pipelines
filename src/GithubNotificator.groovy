@@ -109,9 +109,14 @@ public class GithubNotificator {
                     String osName = tokens.get(0)
 
                     if (!options.customBuildStages) {
-                        buildCases << osName
+                        if (options.containsKey("buildProfiles")) {
+                            options["buildProfiles"].each { profile ->
+                                buildCases << "${osName}-${profile}"
+                            }
+                        } else {
+                            buildCases << osName
+                        }
                     }
-                    
 
                     String gpuNames = ""
                     if (tokens.size() > 1) {
@@ -121,30 +126,83 @@ public class GithubNotificator {
                     if (gpuNames) {
                         gpuNames.split(',').each() { asicName ->
                             if (options.splitTestsExecution) {
-                                options.tests.each() { testName ->
+                                options.testsList.each() { testName ->
                                     // check that group isn't fully skipped
                                     if (options.skippedTests && options.skippedTests.containsKey(testName) && options.skippedTests[testName].contains("${asicName}-${osName}")) {
                                         return
                                     }
+
                                     String parsedTestsName = testName
                                     if (testName.contains("~")) {
                                         String[] testsNameParts = parsedTestsName.split("~")
-                                        String engine = ""
+                                        String profile = ""
                                         if (testsNameParts.length == 2 && testsNameParts[1].contains("-")) {
-                                            engine = testsNameParts[1].split("-")[1]
+                                            profile = testsNameParts[1].split("-")[1]
                                         }
-                                        parsedTestsName = engine ? "${testsNameParts[0]}-${engine}" : "${testsNameParts[0]}"
+
+                                        if (options.skipCallback) {
+                                            if (profile) {
+                                                if (options.skipCallback(options, asicName, osName, "", profile)) {
+                                                    return
+                                                }
+                                            } else {
+                                                if (options.skipCallback(options, asicName, osName, "")) {
+                                                    return
+                                                }
+                                            }
+                                        }
+
+                                        parsedTestsName = profile ? "${testsNameParts[0]}-${profile}" : "${testsNameParts[0]}"
                                         parsedTestsName = parsedTestsName.replace(".json", "")
+                                    } else if (options.testProfiles) {
+                                        if (options.skipCallback) {
+                                            String[] testsNameParts = parsedTestsName.split("-")
+                                            if (options.skipCallback(options, asicName, osName, testsNameParts[0], testsNameParts[1])) {
+                                                return
+                                            }
+                                        }
+                                    } else {
+                                        if (options.skipCallback) {
+                                            if (options.skipCallback(options, asicName, osName, parsedTestsName)) {
+                                                return
+                                            }
+                                        }
                                     }
+
                                     testCases << "${asicName}-${osName}-${parsedTestsName}"
                                 }
                             } else {
                                 if (showTests) {
-                                    options.tests.each() { testName ->
+                                    options.testsList.each() { testName ->
+                                        if (options.skipCallback) {
+                                            if (options.skipCallback(options, asicName, osName, testName)) {
+                                                return
+                                            }
+                                        }
+
                                         testCases << "${asicName}-${osName}-${testName}"
                                     }
                                 } else {
-                                    testCases << "${asicName}-${osName}"
+                                    // created separated checks for different profiles
+                                    if (options.testsList) {
+                                        options.testsList.each() { testName ->
+                                            if (options.skipCallback) {
+                                                if (options.skipCallback(options, asicName, osName, testName)) {
+                                                    return
+                                                }
+                                            }
+
+                                            testCases << "${asicName}-${osName}-${testName}"
+                                        }  
+                                    } else {
+                                        if (options.skipCallback) {
+                                            if (options.skipCallback(options, asicName, osName)) {
+                                                return
+                                            }
+                                        }
+
+                                        testCases << "${asicName}-${osName}"
+                                    }
                                 }
                             }
                         }
@@ -177,9 +235,10 @@ public class GithubNotificator {
                 githubApiProvider.createOrUpdateStatusCheck(paramsBase)
             }
             if (hasDeployStage) {
-                if (options.enginesNames) {
-                    options.enginesNames.each { engine ->
-                        String message = "Building test report for ${engine}"
+                if (options.containsKey("testProfiles")) {
+                    options.testProfiles.each { profile ->
+                        String profileName = options.displayingTestProfiles[profile]
+                        String message = "Building test report for ${profileName}"
                         paramsBase["name"] = "[DEPLOY] ${message}"
                         githubApiProvider.createOrUpdateStatusCheck(paramsBase)
                         deployCases << message
@@ -227,11 +286,11 @@ public class GithubNotificator {
             }
             if (statusTitle.contains("~")) {
                 String[] statusTitleParts = statusTitle.split("~")
-                String engine = ""
+                String profile = ""
                 if (statusTitleParts.length == 2 && statusTitleParts[1].contains("-")) {
-                    engine = statusTitleParts[1].split("-")[1]
+                    profile = statusTitleParts[1].split("-")[1]
                 }
-                statusTitle = engine ? "${statusTitleParts[0]}-${engine}" : "${statusTitleParts[0]}"
+                statusTitle = profile ? "${statusTitleParts[0]}-${profile}" : "${statusTitleParts[0]}"
                 statusTitle = statusTitle.replace(".json", "")
             }
 
@@ -296,11 +355,11 @@ public class GithubNotificator {
         try {
             if (statusTitle.contains("~")) {
                 String[] statusTitleParts = statusTitle.split("~")
-                String engine = ""
+                String profile = ""
                 if (statusTitleParts.length == 2 && statusTitleParts[1].contains("-")) {
-                    engine = statusTitleParts[1].split("-")[1]
+                    profile = statusTitleParts[1].split("-")[1]
                 }
-                statusTitle = engine ? "${statusTitleParts[0]}-${engine}" : "${statusTitleParts[0]}"
+                statusTitle = profile ? "${statusTitleParts[0]}-${profile}" : "${statusTitleParts[0]}"
                 statusTitle = statusTitle.replace(".json", "")
             }
 

@@ -12,7 +12,14 @@ import net.sf.json.JsonConfig
 @Field final PipelineConfiguration PIPELINE_CONFIGURATION = new PipelineConfiguration(
     supportedOS: ["Windows"],
     productExtensions: ["Windows": "msi"],
-    artifactNameBase: "AMD_RenderStudio"
+    artifactNameBase: "AMD_RenderStudio",
+    testProfile: "mode",
+    displayingProfilesMapping: [
+        "mode": [
+            "Desktop": "Desktop",
+            "Web": "Web"
+        ]
+    ]
 )
 
 
@@ -69,18 +76,23 @@ def executeGenTestRefCommand(String osName, Map options, Boolean delete) {
 
 
 def executeTestCommand(String osName, String asicName, Map options) {
-    def testTimeout = options.timeouts["${options.parsedTests}"]
-    String testsNames = options.parsedTests
-    String testsPackageName = options.testsPackage
+    def testTimeout = options.timeouts["${options.tests}"]
+    String testsNames
+    String testsPackageName
+
     if (options.testsPackage != "none" && !options.isPackageSplitted) {
-        if (options.parsedTests.contains(".json")) {
+        if (options.tests.contains(".json")) {
             // if tests package isn't splitted and it's execution of this package - replace test package by test group and test group by empty string
-            testsPackageName = options.parsedTests
+            testsPackageName = options.tests
             testsNames = ""
         } else {
             // if tests package isn't splitted and it isn't execution of this package - replace tests package by empty string
             testsPackageName = "none"
+            testsNames = options.tests
         }
+    } else {
+        testsPackageName = "none"
+        testsNames = options.tests
     }
 
     println "Set timeout to ${testTimeout}"
@@ -90,7 +102,8 @@ def executeTestCommand(String osName, String asicName, Map options) {
             case 'Windows':
                 dir('scripts') {
                     bat """
-                        run.bat \"${testsPackageName}\" \"${testsNames}\" ${options.engine.toLowerCase()} ${options.testCaseRetries} ${options.updateRefs} 1>> \"../${options.stageName}_${options.currentTry}.log\"  2>&1
+                        set TOOL_VERSION=${options.version}
+                        run.bat \"${testsPackageName}\" \"${testsNames}\" ${options.mode.toLowerCase()} ${options.testCaseRetries} ${options.updateRefs} 1>> \"../${options.stageName}_${options.currentTry}.log\"  2>&1
                     """
                 }
                 break
@@ -98,7 +111,8 @@ def executeTestCommand(String osName, String asicName, Map options) {
                 // TODO: rename system name
                 dir("scripts") {
                     sh """
-                        run.bat \"${testsPackageName}\" \"${testsNames}\" ${options.engine.toLowerCase()} ${options.testCaseRetries} ${options.updateRefs} 1>> \"../${options.stageName}_${options.currentTry}.log\"  2>&1
+                        set TOOL_VERSION=${options.version}
+                        run.bat \"${testsPackageName}\" \"${testsNames}\" ${options.mode.toLowerCase()} ${options.testCaseRetries} ${options.updateRefs} 1>> \"../${options.stageName}_${options.currentTry}.log\"  2>&1
                     """
                 }
         }
@@ -107,9 +121,6 @@ def executeTestCommand(String osName, String asicName, Map options) {
 
 
 def executeTests(String osName, String asicName, Map options) {
-    options.parsedTests = options.tests.split("-")[0]
-    options.engine = options.tests.split("-")[1]
-
     // used for mark stash results or not. It needed for not stashing failed tasks which will be retried.
     Boolean stashResults = true
     try {
@@ -144,7 +155,7 @@ def executeTests(String osName, String asicName, Map options) {
                     }
 
                     dir("${CIS_TOOLS}\\..\\PluginsBinaries") {
-                        bat "msiexec.exe /i ${options[getProduct.getIdentificatorKey('Windows')]}.msi /qb"
+                        bat "msiexec.exe /i ${options[getProduct.getIdentificatorKey('Windows', options)]}.msi /qb"
                     }
                 }
             }
@@ -168,7 +179,7 @@ def executeTests(String osName, String asicName, Map options) {
             }
         }
 
-        options.REF_PATH_PROFILE = "/volume1/Baselines/render_studio_autotests/${asicName}-${osName}-${options.engine}"
+        options.REF_PATH_PROFILE = "/volume1/Baselines/render_studio_autotests/${asicName}-${osName}-${options.mode}"
 
         outputEnvironmentInfo("Windows", "", options.currentTry)
 
@@ -185,8 +196,8 @@ def executeTests(String osName, String asicName, Map options) {
         } else {
             withNotifications(title: options["stageName"], printMessage: true, options: options, configuration: NotificationConfiguration.COPY_BASELINES) {
                 String baselineDir = isUnix() ? "${CIS_TOOLS}/../TestResources/render_studio_autotests_baselines" : "/mnt/c/TestResources/render_studio_autotests_baselines"
-                println "[INFO] Downloading reference images for ${options.tests}"
-                options.parsedTests.split(" ").each() {
+                println "[INFO] Downloading reference images for ${options.tests}-${options.mode}"
+                options.tests.split(" ").each() {
                     if (it.contains(".json")) {
                         downloadFiles("${options.REF_PATH_PROFILE}/", baselineDir)
                     } else {
@@ -220,7 +231,7 @@ def executeTests(String osName, String asicName, Map options) {
             dir(options.stageName) {
                 utils.moveFiles(this, "Windows", "../*.log", ".")
                 utils.moveFiles(this, "Windows", "../scripts/*.log", ".")
-                utils.renameFile(this, "Windows", "launcher.engine.log", "${options.stageName}_engine_${options.currentTry}.log")
+                utils.renameFile(this, "Windows", "launcher.engine.log", "${options.stageName}_${options.currentTry}.log")
             }
             archiveArtifacts artifacts: "${options.stageName}/*.log", allowEmptyArchive: true
             if (stashResults) {
@@ -243,7 +254,6 @@ def executeTests(String osName, String asicName, Map options) {
                         // reallocate node if there are still attempts
                         if (sessionReport.summary.total == sessionReport.summary.error + sessionReport.summary.skipped || sessionReport.summary.total == 0) {
                             if (sessionReport.summary.total != sessionReport.summary.skipped) {
-                                // remove broken render studio
                                 uninstallMSI("AMD RenderStudio", options.stageName, options.currentTry)
                                 removeInstaller(osName: "Windows", options: options, extension: "msi")
                                 String errorMessage = (options.currentTry < options.nodeReallocateTries) ? "All tests were marked as error. The test group will be restarted." : "All tests were marked as error."
@@ -252,7 +262,7 @@ def executeTests(String osName, String asicName, Map options) {
                         }
 
                         if (options.reportUpdater) {
-                            options.reportUpdater.updateReport(options.engine)
+                            options.reportUpdater.updateReport(options.mode)
                         }
                     }
                 }
@@ -394,7 +404,7 @@ def executeBuildWindows(Map options) {
                             makeArchiveArtifacts(name: renamedFilename, storeOnNAS: true)
                         }
 
-                        makeStash(includes: renamedFilename, name: getProduct.getStashName("Windows"), preZip: false, storeOnNAS: options.storeOnNAS)
+                        makeStash(includes: renamedFilename, name: getProduct.getStashName("Windows", options), preZip: false, storeOnNAS: options.storeOnNAS)
                     }
                 }
             }
@@ -527,33 +537,11 @@ def executeBuildLinux(Map options) {
         if (options.deploy) {
             println "[INFO] Start deploying on $options.deployEnvironment environment"
             failure = false
-            Boolean status = true
 
             try {
-                println "[INFO] Send deploy command"
+                println "[INFO] Start deploy"
 
-                for (i=0; i < 5; i++) {
-                    res = sh(
-                        script: "curl --insecure https://admin.${webUsdUrlBase}/deploy?configuration=${options.deployEnvironment}",
-                        returnStdout: true,
-                        returnStatus: true
-                    )
-
-                    println ("RES - ${res}")
-
-                    if (res == 0) {
-                        println "[INFO] Successfully sended"
-                        status = true
-                        break
-                    } else {
-                        println "[ERROR] Host not available. Try again"
-                        status = false
-                    }
-                }
-
-                if (!status) {
-                    throw new Exception("[ERROR] Host not available. Retries exceeded")
-                }
+                render_studio_deploy(options.deployEnvironment)
 
                 withCredentials([string(credentialsId: "WebUsdUrlTemplate", variable: "TEMPLATE")]) {
                     String url
@@ -563,13 +551,13 @@ def executeBuildLinux(Map options) {
                     } else {
                         url = TEMPLATE.replace("<instance>", options.deployEnvironment)
                     }
+
                     rtp(nullAction: "1", parserName: "HTML", stableText: """<h3><a href="${url}">[${options.deployEnvironment}] Link to web application</a></h3>""")
                 }
             } catch (e) {
                 println "[ERROR] Error during deploy"
                 println(e.toString())
                 failure = true
-                status = false
             } finally {
                 if (failure) {
                     currentBuild.result = "FAILED"
@@ -636,7 +624,7 @@ def executeBuild(String osName, Map options) {
 
         switch(osName) {
             case 'Windows':
-                options[getProduct.getIdentificatorKey(osName)] = bat(script: "git log --format=%%H -1 ", returnStdout: true).split('\r\n')[2].trim()
+                options[getProduct.getIdentificatorKey(osName, options)] = bat(script: "git log --format=%%H -1 ", returnStdout: true).split('\r\n')[2].trim()
                 executeBuildWindows(options)
                 break
             case 'Web':
@@ -676,11 +664,48 @@ def notifyByTg(Map options){
 }
 
 
-def getReportBuildArgs(String engineName, Map options) {
+def getReportBuildArgs(String mode, Map options) {
     if (options["isPreBuilt"]) {
-        return """RenderStudio "PreBuilt" "PreBuilt" "PreBuilt" \"${utils.escapeCharsByUnicode(engineName)}\" """
+        return """RenderStudio "PreBuilt" "PreBuilt" "PreBuilt" \"${utils.escapeCharsByUnicode(mode)}\" """
     } else {
-        return """RenderStudio ${options.commitSHA} ${options.projectBranchName} \"${utils.escapeCharsByUnicode(options.commitMessage)}\" \"${utils.escapeCharsByUnicode(engineName)}\" """
+        return """RenderStudio ${options.commitSHA} ${options.projectBranchName} \"${utils.escapeCharsByUnicode(options.commitMessage)}\" \"${utils.escapeCharsByUnicode(mode)}\" """
+    }
+}
+
+
+def fillDescription(Map options) {
+    currentBuild.description = "<b>Project branch:</b> ${options.projectBranchName}<br/>"
+    currentBuild.description += "<b>Commit author:</b> ${options.commitAuthor}<br/>"
+    currentBuild.description += "<b>Commit message:</b> ${options.commitMessage}<br/>"
+    currentBuild.description += "<b>Commit SHA:</b> ${options.commitSHA}<br/>"
+
+    currentBuild.description += "<br/>"
+
+    currentBuild.description += "<b>Render Studio verion:</b> ${options.version}<br/>"
+
+    dir("WebUsdFrontendServer") {
+        String version = readFile("VERSION.txt").trim()
+        currentBuild.description += "<b>Frontend verion:</b> ${version}<br/>"
+    }
+
+    dir("WebUsdStreamServer") {
+        String version = readFile("VERSION.txt").trim()
+        currentBuild.description += "<b>Streamer verion:</b> ${version}<br/>"
+    }
+
+    dir("WebUsdLiveServer") {
+        String version = readFile("VERSION.txt").trim()
+        currentBuild.description += "<b>Live server verion:</b> ${version}<br/>"
+    }
+
+    dir("WebUsdRouteServer") {
+        String version = readFile("VERSION.txt").trim()
+        currentBuild.description += "<b>Router verion:</b> ${version}<br/>"
+    }
+
+    dir("WebUsdStorageServer") {
+        String version = readFile("VERSION.txt").trim()
+        currentBuild.description += "<b>Storage verion:</b> ${version}<br/>"
     }
 }
 
@@ -689,7 +714,7 @@ def executePreBuild(Map options) {
     options.executeTests = true
 
     ws("WebUSD-prebuild") {
-        checkoutScm(branchName: options.projectBranch, repositoryUrl: options.projectRepo, disableSubmodules: true)
+        checkoutScm(branchName: options.projectBranch, repositoryUrl: options.projectRepo)
         options.commitAuthor = bat (script: "git show -s --format=%%an HEAD ",returnStdout: true).split('\r\n')[2].trim()
         options.commitMessage = bat (script: "git log --format=%%B -n 1", returnStdout: true).split('\r\n')[2].trim()
         options.commitSHA = bat (script: "git log --format=%%H -1 ", returnStdout: true).split('\r\n')[2].trim()
@@ -761,11 +786,9 @@ def executePreBuild(Map options) {
                 options.projectBranchName = options.projectBranch
             }
 
-            println "The last commit was written by ${options.commitAuthor}."
-            println "Commit message: ${options.commitMessage}"
-            println "Commit SHA: ${options.commitSHA}"
-            println "Commit short SHA: ${options.commitShortSHA}"
-            println "Version: ${version}"
+            options.version = version
+
+            fillDescription(options)
         }
     }
 
@@ -804,7 +827,7 @@ def executePreBuild(Map options) {
                     println("[INFO] Tests package '${options.testsPackage}' can't be splitted")
                 }
 
-                // modify name of tests package if tests package is non-splitted (it will be use for run package few time with different engines)
+                // modify name of tests package if tests package is non-splitted (it will be use for run package few time with different modes)
                 String modifiedPackageName = "${options.testsPackage}~"
 
                 // receive list of group names from package
@@ -836,9 +859,9 @@ def executePreBuild(Map options) {
                     def xml_timeout = utils.getTimeoutFromXML(this, "${it}", "simpleRender.py", options.ADDITIONAL_XML_TIMEOUT)
                     options.timeouts["${it}"] = (xml_timeout > 0) ? xml_timeout : options.TEST_TIMEOUT
                 }
-                options.engines.each { engine ->
+                options.modes.each { mode ->
                     options.tests.each() {
-                        tests << "${it}-${engine}"
+                        tests << "${it}-${mode}"
                     }
                 }
 
@@ -850,15 +873,15 @@ def executePreBuild(Map options) {
                     options.testsPackage = modifiedPackageName
                     // check that package is splitted to parts or not
                     if (packageInfo["groups"] instanceof Map) {
-                        options.engines.each { engine ->
-                            tests << "${modifiedPackageName}-${engine}"
+                        options.modes.each { mode ->
+                            tests << "${modifiedPackageName}-${mode}"
                         } 
                         options.timeouts[options.testsPackage] = options.NON_SPLITTED_PACKAGE_TIMEOUT + options.ADDITIONAL_XML_TIMEOUT
                     } else {
                         // add group stub for each part of package
-                        options.engines.each { engine ->
+                        options.modes.each { mode ->
                             for (int i = 0; i < packageInfo["groups"].size(); i++) {
-                                tests << "${modifiedPackageName}-${engine}".replace(".json", ".${i}.json")
+                                tests << "${modifiedPackageName}-${mode}".replace(".json", ".${i}.json")
                             }
                         }
 
@@ -873,9 +896,9 @@ def executePreBuild(Map options) {
                     def xml_timeout = utils.getTimeoutFromXML(this, it, "simpleRender.py", options.ADDITIONAL_XML_TIMEOUT)
                     options.timeouts["${it}"] = (xml_timeout > 0) ? xml_timeout : options.TEST_TIMEOUT
                 }
-                options.engines.each { engine ->
+                options.modes.each { mode ->
                     options.tests.each() {
-                        tests << "${it}-${engine}"
+                        tests << "${it}-${mode}"
                     }
                 }
             } else {
@@ -883,42 +906,44 @@ def executePreBuild(Map options) {
             }
             options.tests = tests
         }
-
-        if (env.BRANCH_NAME && options.githubNotificator) {
-            options.githubNotificator.initChecks(options, "${BUILD_URL}")
-        }
         
         options.testsList = options.tests
 
         println "timeouts: ${options.timeouts}"
     }
 
+    // make lists of raw profiles and lists of beautified profiles (displaying profiles)
+    multiplatform_pipeline.initProfiles(options)
+
     if (options.flexibleUpdates && multiplatform_pipeline.shouldExecuteDelpoyStage(options)) {
         options.reportUpdater = new ReportUpdater(this, env, options)
         options.reportUpdater.init(this.&getReportBuildArgs)
     }
+
+    if (env.BRANCH_NAME && options.githubNotificator) {
+        options.githubNotificator.initChecks(options, "${BUILD_URL}")
+    }
 }
 
 
-def executeDeploy(Map options, List platformList, List testResultList, String engine) {
+def executeDeploy(Map options, List platformList, List testResultList, String mode) {
     cleanWS()
     try {
-        String engineName = options.enginesNames[options.engines.indexOf(engine)]
+        String modeName = options.displayingTestProfiles[mode]
 
         if (options['executeTests'] && testResultList) {
-            withNotifications(title: "Building test report for ${engineName}", options: options, startUrl: "${BUILD_URL}", configuration: NotificationConfiguration.DOWNLOAD_TESTS_REPO) {
+            withNotifications(title: "Building test report for ${modeName}", options: options, startUrl: "${BUILD_URL}", configuration: NotificationConfiguration.DOWNLOAD_TESTS_REPO) {
                 checkoutScm(branchName: options.testsBranch, repositoryUrl: options.testRepo)
             }
 
             List lostStashes = []
 
             dir("summaryTestResults") {
-                unstashCrashInfo(options['nodeRetry'], engine)
                 testResultList.each() {
-                    if (it.endsWith(engine)) {
+                    if (it.endsWith(mode)) {
                         List testNameParts = it.replace("testResult-", "").split("-") as List
 
-                        if (filter(options, testNameParts.get(0), testNameParts.get(1), testNameParts.get(2), engine)) {
+                        if (filter(options, testNameParts.get(0), testNameParts.get(1), testNameParts.get(2), mode)) {
                             return
                         }
 
@@ -941,7 +966,7 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
             try {
                 dir("jobs_launcher") {
                     bat """
-                        count_lost_tests.bat \"${lostStashes}\" .. ..\\summaryTestResults \"${options.splitTestsExecution}\" \"${options.testsPackage}\" \"[]\" \"${engine}\" \"{}\"
+                        count_lost_tests.bat \"${lostStashes}\" .. ..\\summaryTestResults \"${options.splitTestsExecution}\" \"${options.testsPackage}\" \"[]\" \"${mode}\" \"{}\"
                     """
                 }
             } catch (e) {
@@ -949,7 +974,7 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
             }
 
             try {
-                GithubNotificator.updateStatus("Deploy", "Building test report for ${engineName}", "in_progress", options, NotificationConfiguration.BUILDING_REPORT, "${BUILD_URL}")
+                GithubNotificator.updateStatus("Deploy", "Building test report for ${modeName}", "in_progress", options, NotificationConfiguration.BUILDING_REPORT, "${BUILD_URL}")
 
                 withEnv(["JOB_STARTED_TIME=${options.JOB_STARTED_TIME}", "BUILD_NAME=${options.baseBuildName}"]) {
                     dir("jobs_launcher") {
@@ -957,7 +982,7 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
                         retryInfoList.each{ gpu ->
                             gpu['Tries'].each{ group ->
                                 group.each{ groupKey, retries ->
-                                    if (groupKey.endsWith(engine)) {
+                                    if (groupKey.endsWith(mode)) {
                                         List testNameParts = groupKey.split("-") as List
                                         String parsedName = testNameParts.subList(0, testNameParts.size() - 1).join("-")
                                         group[parsedName] = retries
@@ -973,10 +998,10 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
                             writeJSON file: 'retry_info.json', json: jsonResponse, pretty: 4
                         }
                         try {
-                            bat "build_reports.bat ..\\summaryTestResults ${getReportBuildArgs(engineName, options)}"
+                            bat "build_reports.bat ..\\summaryTestResults ${getReportBuildArgs(modeName, options)}"
                         } catch (e) {
                             String errorMessage = utils.getReportFailReason(e.getMessage())
-                            GithubNotificator.updateStatus("Deploy", "Building test report for ${engineName}", "failure", options, errorMessage, "${BUILD_URL}")
+                            GithubNotificator.updateStatus("Deploy", "Building test report for ${modeName}", "failure", options, errorMessage, "${BUILD_URL}")
                             if (utils.isReportFailCritical(e.getMessage())) {
                                 throw e
                             } else {
@@ -989,7 +1014,7 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
             } catch(e) {
                 String errorMessage = utils.getReportFailReason(e.getMessage())
                 options.problemMessageManager.saveSpecificFailReason(errorMessage, "Deploy")
-                GithubNotificator.updateStatus("Deploy", "Building test report for ${engineName}", "failure", options, errorMessage, "${BUILD_URL}")
+                GithubNotificator.updateStatus("Deploy", "Building test report for ${modeName}", "failure", options, errorMessage, "${BUILD_URL}")
                 println("[ERROR] Failed to build test report.")
                 println(e.toString())
                 println(e.getMessage())
@@ -997,7 +1022,7 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
                     try {
                         // Save test data for access it manually anyway
                         utils.publishReport(this, "${BUILD_URL}", "summaryTestResults", "summary_report.html, compare_report.html", \
-                            "Test Report ${engineName}", "Summary Report, Compare Report" , options.storeOnNAS, \
+                            "Test Report ${modeName}", "Summary Report, Compare Report" , options.storeOnNAS, \
                             ["jenkinsBuildUrl": BUILD_URL, "jenkinsBuildName": currentBuild.displayName, "updatable": options.containsKey("reportUpdater")])
 
                         options.testDataSaved = true 
@@ -1056,24 +1081,24 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
             }
 
             try {
-                options["testsStatus-${engine}"] = readFile("summaryTestResults/slack_status.json")
+                options["testsStatus-${mode}"] = readFile("summaryTestResults/slack_status.json")
             } catch(e) {
                 println(e.toString())
                 println(e.getMessage())
-                options["testsStatus-${engine}"] = ""
+                options["testsStatus-${mode}"] = ""
             }
 
-            withNotifications(title: "Building test report for ${engineName}", options: options, configuration: NotificationConfiguration.PUBLISH_REPORT) {
+            withNotifications(title: "Building test report for ${modeName}", options: options, configuration: NotificationConfiguration.PUBLISH_REPORT) {
                 utils.publishReport(this, "${BUILD_URL}", "summaryTestResults", "summary_report.html, compare_report.html", \
-                    "Test Report ${engineName}", "Summary Report, Compare Report" , options.storeOnNAS, \
+                    "Test Report ${modeName}", "Summary Report, Compare Report" , options.storeOnNAS, \
                     ["jenkinsBuildUrl": BUILD_URL, "jenkinsBuildName": currentBuild.displayName, "updatable": options.containsKey("reportUpdater")])
 
                 if (summaryTestResults) {
                     // add in description of status check information about tests statuses
                     // Example: Report was published successfully (passed: 69, failed: 11, error: 0)
-                    GithubNotificator.updateStatus("Deploy", "Building test report for ${engineName}", "success", options, "${NotificationConfiguration.REPORT_PUBLISHED} Results: passed - ${summaryTestResults.passed}, failed - ${summaryTestResults.failed}, error - ${summaryTestResults.error}.", "${BUILD_URL}/Test_20Report")
+                    GithubNotificator.updateStatus("Deploy", "Building test report for ${modeName}", "success", options, "${NotificationConfiguration.REPORT_PUBLISHED} Results: passed - ${summaryTestResults.passed}, failed - ${summaryTestResults.failed}, error - ${summaryTestResults.error}.", "${BUILD_URL}/Test_20Report")
                 } else {
-                    GithubNotificator.updateStatus("Deploy", "Building test report for ${engineName}", "success", options, NotificationConfiguration.REPORT_PUBLISHED, "${BUILD_URL}/Test_20Report")
+                    GithubNotificator.updateStatus("Deploy", "Building test report for ${modeName}", "success", options, NotificationConfiguration.REPORT_PUBLISHED, "${BUILD_URL}/Test_20Report")
                 }
             }
 
@@ -1103,7 +1128,7 @@ def call(
     String customDomain = '',
     Boolean disableSsl = false,
     String testsPackage = "none",
-    String tests = 'Viewport',
+    String tests = 'Viewport FinalRender',
     String updateRefs = 'No',
     Integer testCaseRetries = 5,
     Boolean skipBuild = false,
@@ -1122,7 +1147,7 @@ def call(
         }
     }
 
-    if (skipBuild && !customBuildLinkWindows && platform.contains("Windows:")) {
+    if (skipBuild && !customBuildLinkWindows && platforms.contains("Windows:")) {
         skipBuild = false
     } else if (customBuildLinkWindows && !skipBuild) {
         skipBuild = true
@@ -1164,6 +1189,7 @@ def call(
                                 executeBuild:!isPreBuilt,
                                 executeTests:true,
                                 BUILD_TIMEOUT:'120',
+                                TEST_TIMEOUT:60,
                                 problemMessageManager:problemMessageManager,
                                 isPreBuilt:isPreBuilt,
                                 retriesForTestStage:1,
@@ -1171,8 +1197,7 @@ def call(
                                 storeOnNAS: true,
                                 flexibleUpdates: true,
                                 skipCallback: this.&filter,
-                                engines: modes,
-                                enginesNames: modes,
+                                modes: modes,
                                 testsPackage:testsPackage,
                                 tests:tests,
                                 updateRefs:updateRefs,

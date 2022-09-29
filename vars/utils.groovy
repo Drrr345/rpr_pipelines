@@ -66,22 +66,22 @@ class utils {
 
     static def stashTestData(Object self, Map options, Boolean publishOnNAS = false, String excludes = "") {
         if (publishOnNAS) {
-            String engine = ""
+            String profile = ""
             String stashName = ""
             String reportName = ""
             List testsResultsParts = options.testResultsName.split("-") as List
-            if (options.containsKey("engines") && options.containsKey("enginesNames")) {
-                engine = testsResultsParts[-1]
-                // Remove "testResult" prefix and engine from stash name
+            if (options.containsKey("testProfiles")) {
+                profile = testsResultsParts[-1]
+                // Remove "testResult" prefix and profile from stash name
                 stashName = testsResultsParts.subList(1, testsResultsParts.size() - 1).join("-")
             } else {
                 // Remove "testResult" prefix from stash name
                 stashName = testsResultsParts.subList(1, testsResultsParts.size()).join("-")
             }
 
-            if (engine) {
-                String engineName = options.enginesNames[options.engines.indexOf(engine)]
-                reportName = "Test_Report_${engineName}"
+            if (options.containsKey("testProfiles")) {
+                String profileName = options.containsKey("displayingTestProfiles") ? options.displayingTestProfiles[profile] : profile
+                reportName = "Test_Report_${profileName}"
             } else {
                 reportName = "Test_Report"
             }
@@ -371,9 +371,15 @@ class utils {
                     break
                 // OSX & Ubuntu
                 default:
-                    self.sh """
-                        rm -rf \"${fileName}\"
-                    """
+                    if (fileName.contains(" ")) {
+                        self.sh """
+                            rm -rf \"${fileName}\"
+                        """
+                    } else {
+                        self.sh """
+                            rm -rf ${fileName}
+                        """
+                    }
             }
         } catch(Exception e) {
             self.println("[ERROR] Can't remove file")
@@ -619,8 +625,8 @@ class utils {
     }
 
     static def generateOverviewReport(Object self, def buildArgsFunc, Map options) {
-        // do not build an overview report for builds with only one engine
-        if (options.engines && options.engines.size() > 1) {
+        // do not build an overview report for builds with only one test profile
+        if (options.containsKey("testProfiles") && options["testProfiles"].size() > 1) {
             self.withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: 'jenkinsCredentials', usernameVariable: 'JENKINS_USERNAME', passwordVariable: 'JENKINS_PASSWORD']]) {
                 try {
                     String publishedReportName = getPublishedReportName("Test_Report")
@@ -643,14 +649,14 @@ class utils {
 
                     Boolean allReportsExists = true
 
-                    for (engine in options.engines.reverse()) {
+                    for (profile in options["testProfiles"].reverse()) {
                         String publishedReportName = ""
 
-                        if (options.enginesNames) {
-                            String originalEngineName = options.enginesNames[options.engines.indexOf(engine)]
-                            publishedReportName = getPublishedReportName(self, "Test Report ${originalEngineName}")
+                        if (options.containsKey("displayingTestProfiles")) {
+                            String profileName = options.displayingTestProfiles[profile]
+                            publishedReportName = getPublishedReportName(self, "Test Report ${profileName}")
                         } else {
-                            publishedReportName = getPublishedReportName(self, "Test Report ${engine}")
+                            publishedReportName = getPublishedReportName(self, "Test Report ${profile}")
                         }
 
                         try {

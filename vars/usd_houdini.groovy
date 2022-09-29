@@ -11,22 +11,27 @@ import java.util.concurrent.ConcurrentHashMap
 @Field final String PRODUCT_NAME = "AMD%20Radeon™%20ProRender%20for%20USDPlugin"
 @Field final String PROJECT_REPO = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonProRenderUSD.git"
 
+@Field final PipelineConfiguration PIPELINE_CONFIGURATION = new PipelineConfiguration(
+    supportedOS: ["Windows", "OSX", "Ubuntu20"],
+    productExtensions: ["Windows": "tar.gz", "OSX": "tar.gz", "MacOS_ARM": "tar.gz", "Ubuntu18": "tar.gz", "Ubuntu20": "tar.gz"],
+    artifactNameBase: "hdRpr_",
+    buildProfile: "toolVersion",
+    testProfile: "toolVersion"
+)
 
 def installHoudiniPlugin(String osName, Map options) {
+    getProduct(osName, options, ".", false)
+
     switch(osName) {
         case 'Windows':
-            makeUnstash(name: "appWindows", unzip: false, storeOnNAS: options.storeOnNAS)
             bat """
-                bash.exe -c "tar -xzf hdRpr_${osName}.tar.gz"
                 cd hdRpr*
                 echo y | activateHoudiniPlugin.exe >> \"..\\${options.stageName}_${options.currentTry}.install.log\"  2>&1
             """
             break
 
         case "OSX":
-            makeUnstash(name: "appOSX", unzip: false, storeOnNAS: options.storeOnNAS)
             sh """
-                tar -xzf hdRpr_${osName}.tar.gz 
                 cd hdRpr*
                 chmod +x activateHoudiniPlugin
                 echo y | ./activateHoudiniPlugin >> \"../${options.stageName}_${options.currentTry}.install.log\" 2>&1
@@ -34,9 +39,7 @@ def installHoudiniPlugin(String osName, Map options) {
             break
 
         default:
-            makeUnstash(name: "app${osName}", unzip: false, storeOnNAS: options.storeOnNAS)
             sh """
-                tar -xzf hdRpr_${osName}.tar.gz
                 cd hdRpr*
                 chmod +x activateHoudiniPlugin
                 echo y | ./activateHoudiniPlugin \"../${options.stageName}_${options.currentTry}.install.log\" 2>&1
@@ -61,7 +64,7 @@ def buildRenderCache(String osName, Map options) {
                 break
             default:
                 sh """
-                    export LD_LIBRARY_PATH="/home/\$(eval whoami)/Houdini/hfs${options.houdiniVersion}/dsolib"
+                    export LD_LIBRARY_PATH="/home/\$(eval whoami)/Houdini/hfs${options.toolVersion}/dsolib"
                     chmod +x build_rpr_cache.sh
                     ./build_rpr_cache.sh \"/home/user/${options.unix_tool_path}/bin/husk\" >> \"../${options.stageName}_${options.currentTry}.cb.log\" 2>&1
                 """     
@@ -109,14 +112,14 @@ def executeTestCommand(String osName, String asicName, Map options) {
                             set RIF_TRACING_ENABLED=1
                             set RIF_TRACING_PATH=${env.WORKSPACE}\\${env.STAGE_NAME}_RIF_Trace
                             set PXR_PLUGINPATH_NAME=
-                            set MATERIALX_SEARCH_PATH=C:\\TestResources\\rpr_usdplugin_autotests_assets\\Resources\\RPRMaterialLibrary\\Materials
+                            set MATERIALX_SEARCH_PATH=C:\\TestResources\\${options.assetsName}_assets\\Resources\\RPRMaterialLibrary\\Materials
                             echo %MATERIALX_SEARCH_PATH%
                             run.bat ${options.testsPackage} \"${options.tests}\" ${options.width} ${options.height} ${options.updateRefs} \"${options.win_tool_path}\\bin\\husk.exe\" \"${rprTracesRoot}\" >> \"../${STAGE_NAME}_${options.currentTry}.log\" 2>&1
                         """
                     } else {
                         bat """
                             set PXR_PLUGINPATH_NAME=
-                            set MATERIALX_SEARCH_PATH=C:\\TestResources\\rpr_usdplugin_autotests_assets\\Resources\\RPRMaterialLibrary\\Materials
+                            set MATERIALX_SEARCH_PATH=C:\\TestResources\\${options.assetsName}_assets\\Resources\\RPRMaterialLibrary\\Materials
                             echo %MATERIALX_SEARCH_PATH%
                             run.bat ${options.testsPackage} \"${options.tests}\" ${options.width} ${options.height} ${options.updateRefs} \"${options.win_tool_path}\\bin\\husk.exe\" \"${rprTracesRoot}\" >> \"../${STAGE_NAME}_${options.currentTry}.log\" 2>&1
                         """
@@ -131,7 +134,7 @@ def executeTestCommand(String osName, String asicName, Map options) {
                             export RIF_TRACING_PATH=${env.WORKSPACE}/${env.STAGE_NAME}_RIF_Trace
                             chmod +x run.sh
                             export PXR_PLUGINPATH_NAME=
-                            export MATERIALX_SEARCH_PATH=\$CIS_TOOLS/../TestResources/rpr_usdplugin_autotests_assets/Resources/RPRMaterialLibrary/Materials
+                            export MATERIALX_SEARCH_PATH=\$CIS_TOOLS/../TestResources/${options.assetsName}_assets/Resources/RPRMaterialLibrary/Materials
                             echo \$MATERIALX_SEARCH_PATH
                             ./run.sh ${options.testsPackage} \"${options.tests}\" ${options.width} ${options.height} ${options.updateRefs} \"${options.osx_tool_path}/bin/husk\" \"${rprTracesRoot}\" >> \"../${STAGE_NAME}_${options.currentTry}.log\" 2>&1
                         """
@@ -139,7 +142,7 @@ def executeTestCommand(String osName, String asicName, Map options) {
                         sh """
                             chmod +x run.sh
                             export PXR_PLUGINPATH_NAME=
-                            export MATERIALX_SEARCH_PATH=\$CIS_TOOLS/../TestResources/rpr_usdplugin_autotests_assets/Resources/RPRMaterialLibrary/Materials
+                            export MATERIALX_SEARCH_PATH=\$CIS_TOOLS/../TestResources/${options.assetsName}_assets/Resources/RPRMaterialLibrary/Materials
                             echo \$MATERIALX_SEARCH_PATH
                             ./run.sh ${options.testsPackage} \"${options.tests}\" ${options.width} ${options.height} ${options.updateRefs} \"${options.osx_tool_path}/bin/husk\" \"${rprTracesRoot}\" >> \"../${STAGE_NAME}_${options.currentTry}.log\" 2>&1
                         """
@@ -152,19 +155,19 @@ def executeTestCommand(String osName, String asicName, Map options) {
                             mkdir -p "${env.WORKSPACE}/${env.STAGE_NAME}_RIF_Trace"
                             export RIF_TRACING_ENABLED=1
                             export RIF_TRACING_PATH=${env.WORKSPACE}/${env.STAGE_NAME}_RIF_Trace
-                            export LD_LIBRARY_PATH="/home/\$(eval whoami)/Houdini/hfs${options.houdiniVersion}/dsolib"
+                            export LD_LIBRARY_PATH="/home/\$(eval whoami)/Houdini/hfs${options.toolVersion}/dsolib"
                             chmod +x run.sh
                             export PXR_PLUGINPATH_NAME=
-                            export MATERIALX_SEARCH_PATH=\$CIS_TOOLS/../TestResources/rpr_usdplugin_autotests_assets/Resources/RPRMaterialLibrary/Materials
+                            export MATERIALX_SEARCH_PATH=\$CIS_TOOLS/../TestResources/${options.assetsName}_assets/Resources/RPRMaterialLibrary/Materials
                             echo \$MATERIALX_SEARCH_PATH
                             ./run.sh ${options.testsPackage} \"${options.tests}\" ${options.width} ${options.height} ${options.updateRefs} \"/home/user/${options.unix_tool_path}/bin/husk\" \"${rprTracesRoot}\" >> \"../${STAGE_NAME}_${options.currentTry}.log\" 2>&1
                         """
                     } else {
                         sh """
-                            export LD_LIBRARY_PATH="/home/\$(eval whoami)/Houdini/hfs${options.houdiniVersion}/dsolib"
+                            export LD_LIBRARY_PATH="/home/\$(eval whoami)/Houdini/hfs${options.toolVersion}/dsolib"
                             chmod +x run.sh
                             export PXR_PLUGINPATH_NAME=
-                            export MATERIALX_SEARCH_PATH=\$CIS_TOOLS/../TestResources/rpr_usdplugin_autotests_assets/Resources/RPRMaterialLibrary/Materials
+                            export MATERIALX_SEARCH_PATH=\$CIS_TOOLS/../TestResources/${options.assetsName}_assets/Resources/RPRMaterialLibrary/Materials
                             echo \$MATERIALX_SEARCH_PATH
                             ./run.sh ${options.testsPackage} \"${options.tests}\" ${options.width} ${options.height} ${options.updateRefs} \"/home/user/${options.unix_tool_path}/bin/husk\" \"${rprTracesRoot}\" >> \"../${STAGE_NAME}_${options.currentTry}.log\" 2>&1
                         """
@@ -181,7 +184,7 @@ def executeTests(String osName, String asicName, Map options) {
         withNotifications(title: options["stageName"], options: options, logUrl: "${BUILD_URL}", configuration: NotificationConfiguration.INSTALL_HOUDINI) {
             timeout(time: "20", unit: "MINUTES") {
                 withCredentials([[$class: "UsernamePasswordMultiBinding", credentialsId: "sidefxCredentials", usernameVariable: "USERNAME", passwordVariable: "PASSWORD"]]) {
-                    println python3("${CIS_TOOLS}/houdini_api.py --client_id \"$USERNAME\" --client_secret_key \"$PASSWORD\" --version \"${options.houdiniVersion}\"")
+                    println python3("${CIS_TOOLS}/houdini_api.py --client_id \"$USERNAME\" --client_secret_key \"$PASSWORD\" --version \"${options.toolVersion}\"")
                 }
             }
         }
@@ -198,8 +201,8 @@ def executeTests(String osName, String asicName, Map options) {
         }
 
         withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.DOWNLOAD_SCENES) {
-            String assetsDir = isUnix() ? "${CIS_TOOLS}/../TestResources/rpr_usdplugin_autotests_assets" : "/mnt/c/TestResources/rpr_usdplugin_autotests_assets"
-            downloadFiles("/volume1/web/Assets/rpr_usdplugin_autotests/", assetsDir, "", true)
+            String assetsDir = isUnix() ? "${CIS_TOOLS}/../TestResources/${options.assetsName}_assets" : "/mnt/c/TestResources/${options.assetsName}_assets"
+            downloadFiles("/volume1/web/Assets/${options.assetsName}/", assetsDir, "", true)
         }
 
         withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.INSTALL_PLUGIN) {
@@ -218,7 +221,7 @@ def executeTests(String osName, String asicName, Map options) {
             }
         }
 
-        String REF_PATH_PROFILE="/volume1/Baselines/rpr_usdplugin_autotests/${asicName}-${osName}"
+        String REF_PATH_PROFILE="/volume1/Baselines/rpr_usdplugin_autotests/${asicName}-${osName}-${options.toolVersion}"
         outputEnvironmentInfo(osName, options.stageName, options.currentTry)
 
         if (options["updateRefs"].contains("Update")) {
@@ -290,7 +293,6 @@ def executeTests(String osName, String asicName, Map options) {
                         println "Skipped: ${sessionReport.summary.skipped}"
                         if (sessionReport.summary.total == sessionReport.summary.error + sessionReport.summary.skipped || sessionReport.summary.total == 0) {
                             if (sessionReport.summary.total != sessionReport.summary.skipped){
-                                // collectCrashInfo(osName, options, options.currentTry)
                                 String errorMessage = (options.currentTry < options.nodeReallocateTries) ?
                                         "All tests were marked as error. The test group will be restarted." :
                                         "All tests were marked as error."
@@ -299,7 +301,7 @@ def executeTests(String osName, String asicName, Map options) {
                         }
 
                         if (options.reportUpdater) {
-                            options.reportUpdater.updateReport(options.engine)
+                            options.reportUpdater.updateReport(options.testProfile)
                         }
                     }
                 }
@@ -341,16 +343,16 @@ def executeBuildWindows(String osName, Map options) {
         }
 
         dir ("RadeonProRenderUSD") {
-            GithubNotificator.updateStatus("Build", osName, "in_progress", options, NotificationConfiguration.BUILD_SOURCE_CODE_START_MESSAGE, "${BUILD_URL}/artifact/Build-Windows.log")
+            GithubNotificator.updateStatus("Build", "${osName}-${options.buildProfile}", "in_progress", options, NotificationConfiguration.BUILD_SOURCE_CODE_START_MESSAGE, "${BUILD_URL}/artifact/Build-Windows.log")
             
             String additionalKeys = ""
 
-            if (options.houdiniVersion.startsWith("18.5.")) {
+            if (options.toolVersion.startsWith("18.5.")) {
                 additionalKeys = "-G 'Visual Studio 15 2017 Win64'"
             }
 
             if (options.buildType == "Houdini") {
-                options.win_tool_path = "C:\\Program Files\\Side Effects Software\\Houdini ${options.houdiniVersion}"
+                options.win_tool_path = "C:\\Program Files\\Side Effects Software\\Houdini ${options.toolVersion}"
                 bat """
                     mkdir build
                     set PATH=c:\\python39\\;c:\\python39\\scripts\\;%PATH%;
@@ -369,7 +371,7 @@ def executeBuildWindows(String osName, Map options) {
 
             dir("build") {
                 if (options.buildType == "Houdini") {
-                    options.win_build_name = "hdRpr-${options.pluginVersion}-Houdini-${options.houdiniVersion}-${osName}"
+                    options.win_build_name = "hdRpr-${options.pluginVersion}-Houdini-${options.toolVersion}-${osName}"
                 } else if (options.buildType == "USD") {
                     options.win_build_name = "hdRpr-${options.pluginVersion}-USD-${osName}"
                 }
@@ -380,8 +382,8 @@ def executeBuildWindows(String osName, Map options) {
                 String artifactURL = makeArchiveArtifacts(name: ARTIFACT_NAME, storeOnNAS: options.storeOnNAS)
 
                 bat "rename hdRpr* hdRpr_${osName}.tar.gz"
-                makeStash(includes: "hdRpr_${osName}.tar.gz", name: "app${osName}", preZip: false, storeOnNAS: options.storeOnNAS)
-                GithubNotificator.updateStatus("Build", osName, "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
+                makeStash(includes: "hdRpr_${osName}.tar.gz", name: getProduct.getStashName(osName, options), preZip: false, storeOnNAS: options.storeOnNAS)
+                GithubNotificator.updateStatus("Build", "${osName}-${options.buildProfile}", "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
             }
         }
     }
@@ -409,14 +411,14 @@ def executeBuildOSX(String osName, Map options) {
     }
 
     dir ("RadeonProRenderUSD") {
-        GithubNotificator.updateStatus("Build", osName, "in_progress", options, NotificationConfiguration.BUILD_SOURCE_CODE_START_MESSAGE, "${BUILD_URL}/artifact/Build-OSX.log")
+        GithubNotificator.updateStatus("Build", "${osName}-${options.buildProfile}", "in_progress", options, NotificationConfiguration.BUILD_SOURCE_CODE_START_MESSAGE, "${BUILD_URL}/artifact/Build-OSX.log")
         if (options.buildType == "Houdini") {
-            options.osx_tool_path = "/Applications/Houdini/Houdini${options.houdiniVersion}/Frameworks/Houdini.framework/Versions/Current/Resources"
-            String[] versionParts = options.houdiniVersion.split("\\.")
+            options.osx_tool_path = "/Applications/Houdini/Houdini${options.toolVersion}/Frameworks/Houdini.framework/Versions/Current/Resources"
+            String[] versionParts = options.toolVersion.split("\\.")
             sh """
                 mkdir build
                 export HFS=${options.osx_tool_path}
-                /Applications/Houdini/Houdini${options.houdiniVersion}/Frameworks/Houdini.framework/Versions/${versionParts[0]}.${versionParts[1]}/Resources/bin/hserver
+                /Applications/Houdini/Houdini${options.toolVersion}/Frameworks/Houdini.framework/Versions/${versionParts[0]}.${versionParts[1]}/Resources/bin/hserver
                 python3 --version >> ../${STAGE_NAME}.log 2>&1
                 python3 pxr/imaging/plugin/hdRpr/package/generatePackage.py -i "." -o "build" >> ../${STAGE_NAME}.log 2>&1
             """
@@ -430,7 +432,7 @@ def executeBuildOSX(String osName, Map options) {
 
         dir("build") {
             if (options.buildType == "Houdini") {
-                options.osx_build_name = "hdRpr-${options.pluginVersion}-Houdini-${options.houdiniVersion}-macOS"
+                options.osx_build_name = "hdRpr-${options.pluginVersion}-Houdini-${options.toolVersion}-macOS"
             } else if (options.buildType == "USD") {
                 options.osx_build_name = "hdRpr-${options.pluginVersion}-USD-macOS"
             }
@@ -440,8 +442,8 @@ def executeBuildOSX(String osName, Map options) {
             String artifactURL = makeArchiveArtifacts(name: ARTIFACT_NAME, storeOnNAS: options.storeOnNAS)
 
             sh "mv hdRpr*.tar.gz hdRpr_${osName}.tar.gz"
-            makeStash(includes: "hdRpr_${osName}.tar.gz", name: "app${osName}", preZip: false, storeOnNAS: options.storeOnNAS)
-            GithubNotificator.updateStatus("Build", osName, "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
+            makeStash(includes: "hdRpr_${osName}.tar.gz", name: getProduct.getStashName(osName, options), preZip: false, storeOnNAS: options.storeOnNAS)
+            GithubNotificator.updateStatus("Build", "${osName}-${options.buildProfile}", "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
         }
     }
 }
@@ -468,7 +470,7 @@ def executeBuildUnix(String osName, Map options) {
     }
 
     dir("RadeonProRenderUSD") {
-        GithubNotificator.updateStatus("Build", osName, "in_progress", options, NotificationConfiguration.BUILD_SOURCE_CODE_START_MESSAGE, "${BUILD_URL}/artifact/Build-${osName}.log")
+        GithubNotificator.updateStatus("Build", "${osName}-${options.buildProfile}", "in_progress", options, NotificationConfiguration.BUILD_SOURCE_CODE_START_MESSAGE, "${BUILD_URL}/artifact/Build-${osName}.log")
         String installation_path
         if (env.HOUDINI_INSTALLATION_PATH) {
             installation_path = "${env.HOUDINI_INSTALLATION_PATH}"
@@ -476,7 +478,7 @@ def executeBuildUnix(String osName, Map options) {
             installation_path = "/home/\$(eval whoami)"
         }
         if (options.buildType == "Houdini") {
-            options.unix_tool_path = "Houdini/hfs${options.houdiniVersion}"
+            options.unix_tool_path = "Houdini/hfs${options.toolVersion}"
             sh """
                 mkdir build
                 export HFS=${installation_path}/${options.unix_tool_path}
@@ -494,7 +496,7 @@ def executeBuildUnix(String osName, Map options) {
 
         dir("build") {
             if (options.buildType == "Houdini") {
-                options.unix_build_name = "hdRpr-${options.pluginVersion}-Houdini-${options.houdiniVersion}-${osName}"
+                options.unix_build_name = "hdRpr-${options.pluginVersion}-Houdini-${options.toolVersion}-${osName}"
             } else if (options.buildType == "USD") {
                 options.unix_build_name = "hdRpr-${options.pluginVersion}-USD-${osName}"
             }
@@ -504,8 +506,8 @@ def executeBuildUnix(String osName, Map options) {
             String artifactURL = makeArchiveArtifacts(name: ARTIFACT_NAME, storeOnNAS: options.storeOnNAS)
 
             sh "mv hdRpr*.tar.gz hdRpr_${osName}.tar.gz"
-            makeStash(includes: "hdRpr_${osName}.tar.gz", name: "app${osName}", preZip: false, storeOnNAS: options.storeOnNAS)
-            GithubNotificator.updateStatus("Build", osName, "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
+            makeStash(includes: "hdRpr_${osName}.tar.gz", name: getProduct.getStashName(osName, options), preZip: false, storeOnNAS: options.storeOnNAS)
+            GithubNotificator.updateStatus("Build", "${osName}-${options.buildProfile}", "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
         }
     }
 }
@@ -518,7 +520,7 @@ def executeBuild(String osName, Map options) {
         withNotifications(title: osName, options: options, configuration: NotificationConfiguration.INSTALL_HOUDINI) {
             timeout(time: "20", unit: "MINUTES") {
                 withCredentials([[$class: "UsernamePasswordMultiBinding", credentialsId: "sidefxCredentials", usernameVariable: "USERNAME", passwordVariable: "PASSWORD"]]) {
-                    println python3("${CIS_TOOLS}/houdini_api.py --client_id \"$USERNAME\" --client_secret_key \"$PASSWORD\" --version \"${options.houdiniVersion}\"")
+                    println python3("${CIS_TOOLS}/houdini_api.py --client_id \"$USERNAME\" --client_secret_key \"$PASSWORD\" --version \"${options.toolVersion}\"")
                 }
             }
         }
@@ -526,7 +528,7 @@ def executeBuild(String osName, Map options) {
 
     try {
         dir ("RadeonProRenderUSD") {
-            withNotifications(title: osName, options: options, configuration: NotificationConfiguration.DOWNLOAD_SOURCE_CODE_REPO) {
+            withNotifications(title: "${osName}-${options.buildProfile}", options: options, configuration: NotificationConfiguration.DOWNLOAD_SOURCE_CODE_REPO) {
                 checkoutScm(branchName: options.projectBranch, repositoryUrl: options.projectRepo)
             }
 
@@ -538,15 +540,17 @@ def executeBuild(String osName, Map options) {
         }
 
         if (options.rebuildUSD) {
-            withNotifications(title: osName, options: options, configuration: NotificationConfiguration.DOWNLOAD_USD_REPO) {
+            withNotifications(title: "${osName}-${options.buildProfile}", options: options, configuration: NotificationConfiguration.DOWNLOAD_USD_REPO) {
                 dir('USD') {
                     checkoutScm(branchName: options.usdBranch, repositoryUrl: "git@github.com:PixarAnimationStudios/USD.git")
                 }
             }
         }
 
+        utils.removeFile(this, osName, "*.log")
+
         outputEnvironmentInfo(osName)
-        withNotifications(title: osName, options: options, configuration: NotificationConfiguration.BUILD_SOURCE_CODE) {
+        withNotifications(title: "${osName}-${options.buildProfile}", options: options, configuration: NotificationConfiguration.BUILD_SOURCE_CODE) {
             switch(osName) {
                 case "Windows":
                     executeBuildWindows(osName, options)
@@ -558,6 +562,8 @@ def executeBuild(String osName, Map options) {
                     executeBuildUnix(osName, options)
             }
         }
+
+        options[getProduct.getIdentificatorKey(osName, options)] = options.commitSHA + "_" + options.toolVersion
     } catch (e) {
         def exception = e
 
@@ -582,8 +588,8 @@ def executeBuild(String osName, Map options) {
     }
 }
 
-def getReportBuildArgs(Map options, String title = "USD") {
-    return """${title} ${options.commitSHA} ${options.projectBranchName} \"${utils.escapeCharsByUnicode(options.commitMessage)}\""""
+def getReportBuildArgs(String toolName, Map options, String title = "USD") {
+    return """${title} ${options.commitSHA} ${options.projectBranchName} \"${utils.escapeCharsByUnicode(options.commitMessage)}\" \"${utils.escapeCharsByUnicode(toolName)}\""""
 }
 
 def executePreBuild(Map options) {
@@ -639,7 +645,7 @@ def executePreBuild(Map options) {
                     githubNotificator.initPreBuild("${BUILD_URL}")
                     options.projectBranchName = githubNotificator.branchName
                 }
-                
+
                 if (env.BRANCH_NAME == "develop" && options.commitAuthor != "radeonprorender") {
                     println "[INFO] Incrementing version of change made by ${options.commitAuthor}."
                     println "[INFO] Current build version: ${options.majorVersion}.${options.minorVersion}.${options.patchVersion}"
@@ -693,16 +699,21 @@ def executePreBuild(Map options) {
                 options.executeTests = false
             }
 
-            options.testsList = ['']
-        }
-        if (env.BRANCH_NAME && options.githubNotificator) {
-            options.githubNotificator.initChecks(options, "${BUILD_URL}")
+            options.buildsList = options.houdiniVersions
+            options.testsList = options.houdiniVersions
         }
     }
+
+    // make lists of raw profiles and lists of beautified profiles (displaying profiles)
+    multiplatform_pipeline.initProfiles(options)
 
     if (options.flexibleUpdates && multiplatform_pipeline.shouldExecuteDelpoyStage(options)) {
         options.reportUpdater = new ReportUpdater(this, env, options)
         options.reportUpdater.init(this.&getReportBuildArgs)
+    }
+
+    if (env.BRANCH_NAME && options.githubNotificator) {
+        options.githubNotificator.initChecks(options, "${BUILD_URL}")
     }
 
     if (env.BRANCH_NAME && env.BRANCH_NAME == "develop") {
@@ -712,23 +723,29 @@ def executePreBuild(Map options) {
 }
 
 
-def executeDeploy(Map options, List platformList, List testResultList) {
+def executeDeploy(Map options, List platformList, List testResultList, String toolVersion) {
     try {
         if (options['executeTests'] && testResultList) {
             withNotifications(title: "Building test report", options: options, startUrl: "${BUILD_URL}", configuration: NotificationConfiguration.DOWNLOAD_TESTS_REPO) {
                 checkoutScm(branchName: options.testsBranch, repositoryUrl: options.testRepo)
             }
             List lostStashes = []
+
             dir("summaryTestResults") {
-                unstashCrashInfo(options['nodeRetry'])
-                testResultList.each {
-                    dir(it.replace("testResult-", "")) {
-                        try {
-                            makeUnstash(name: it, storeOnNAS: options.storeOnNAS)
-                        } catch (e) {
-                            println "Can't unstash ${it}"
-                            lostStashes << "'$it'".replace("testResult-", "")
-                            println e.toString()
+                testResultList.each() {
+                    if (it.endsWith(toolVersion)) {
+                        List testNameParts = it.replace("testResult-", "").split("-") as List
+                        String testName = testNameParts.subList(0, testNameParts.size() - 1).join("-")
+                        dir(testName) {
+                            try {
+                                makeUnstash(name: "$it", storeOnNAS: options.storeOnNAS)
+                            } catch(e) {
+                                echo "[ERROR] Failed to unstash ${it}"
+                                lostStashes.add("'${testName}'")
+                                println(e.toString())
+                                println(e.getMessage())
+                            }
+
                         }
                     }
                 }
@@ -736,7 +753,7 @@ def executeDeploy(Map options, List platformList, List testResultList) {
 
             try {
                 dir("jobs_launcher") {
-                    bat "count_lost_tests.bat \"${lostStashes}\" .. ..\\summaryTestResults \"${options.splitTestsExecution}\" \"${options.testsPackage}\" \"${options.tests.toString()}\" \"\" \"{}\""
+                    bat "count_lost_tests.bat \"${lostStashes}\" .. ..\\summaryTestResults \"${options.splitTestsExecution}\" \"${options.testsPackage}\" \"${options.tests.toString()}\" \"${toolVersion}\" \"{}\""
                 }
             } catch (e) {
                 println("[ERROR] Can't generate number of lost tests")
@@ -758,18 +775,18 @@ def executeDeploy(Map options, List platformList, List testResultList) {
                             writeJSON file: 'retry_info.json', json: JSONSerializer.toJSON(retryInfo, new JsonConfig()), pretty: 4
                         }
                         if (options.buildType == "Houdini") {
-                            def tool = "Houdini ${options.houdiniVersion}"
+                            def tool = "Houdini ${options.toolVersion}"
 
-                            bat "build_reports.bat ..\\summaryTestResults ${getReportBuildArgs(options, utils.escapeCharsByUnicode(tool))}"
+                            bat "build_reports.bat ..\\summaryTestResults ${getReportBuildArgs(toolVersion, options, utils.escapeCharsByUnicode(tool))}"
                         } else {
-                            bat "build_reports.bat ..\\summaryTestResults ${getReportBuildArgs(options)}"
+                            bat "build_reports.bat ..\\summaryTestResults ${getReportBuildArgs(toolVersion, options)}"
                         }
                         bat "get_status.bat ..\\summaryTestResults"
                     }
                 }
             } catch (e) {
                 String errorMessage = utils.getReportFailReason(e.getMessage())
-                GithubNotificator.updateStatus("Deploy", "Building test report", "failure", options, errorMessage, "${BUILD_URL}")
+                GithubNotificator.updateStatus("Deploy", "Building test report for ${toolVersion}", "failure", options, errorMessage, "${BUILD_URL}")
                 if (utils.isReportFailCritical(e.getMessage())) {
                     options.problemMessageManager.saveSpecificFailReason(errorMessage, "Deploy")
                     println """
@@ -780,7 +797,7 @@ def executeDeploy(Map options, List platformList, List testResultList) {
                         try {
                             // Save test data for access it manually anyway
                             utils.publishReport(this, "${BUILD_URL}", "summaryTestResults", "summary_report.html, performance_report.html, compare_report.html", \
-                                "Test Report", "Summary Report, Performance Report, Compare Report" , options.storeOnNAS, \
+                                "Test Report ${toolVersion}", "Summary Report, Performance Report, Compare Report" , options.storeOnNAS, \
                                 ["jenkinsBuildUrl": BUILD_URL, "jenkinsBuildName": currentBuild.displayName, "updatable": options.containsKey("reportUpdater")])
 
                             options.testDataSaved = true
@@ -840,17 +857,17 @@ def executeDeploy(Map options, List platformList, List testResultList) {
                 options.testsStatus = ""
             }
 
-            withNotifications(title: "Building test report", options: options, configuration: NotificationConfiguration.PUBLISH_REPORT) {
+            withNotifications(title: "Building test report for ${toolVersion}", options: options, configuration: NotificationConfiguration.PUBLISH_REPORT) {
                 utils.publishReport(this, "${BUILD_URL}", "summaryTestResults", "summary_report.html, performance_report.html, compare_report.html", \
-                    "Test Report", "Summary Report, Performance Report, Compare Report" , options.storeOnNAS, \
+                    "Test Report ${toolVersion}", "Summary Report, Performance Report, Compare Report" , options.storeOnNAS, \
                     ["jenkinsBuildUrl": BUILD_URL, "jenkinsBuildName": currentBuild.displayName, "updatable": options.containsKey("reportUpdater")])
 
                 if (summaryTestResults) {
                     // add in description of status check information about tests statuses
                     // Example: Report was published successfully (passed: 69, failed: 11, error: 0)
-                    GithubNotificator.updateStatus("Deploy", "Building test report", "success", options, "${NotificationConfiguration.REPORT_PUBLISHED} Results: passed - ${summaryTestResults.passed}, failed - ${summaryTestResults.failed}, error - ${summaryTestResults.error}.", "${BUILD_URL}/Test_20Report")
+                    GithubNotificator.updateStatus("Deploy", "Building test report for ${toolVersion}", "success", options, "${NotificationConfiguration.REPORT_PUBLISHED} Results: passed - ${summaryTestResults.passed}, failed - ${summaryTestResults.failed}, error - ${summaryTestResults.error}.", "${BUILD_URL}/Test_20Report")
                 } else {
-                    GithubNotificator.updateStatus("Deploy", "Building test report", "success", options, NotificationConfiguration.REPORT_PUBLISHED, "${BUILD_URL}/Test_20Report")
+                    GithubNotificator.updateStatus("Deploy", "Building test report for ${toolVersion}", "success", options, NotificationConfiguration.REPORT_PUBLISHED, "${BUILD_URL}/Test_20Report")
                 }
             }
         }
@@ -869,10 +886,10 @@ def call(String projectRepo = PROJECT_REPO,
         String projectBranch = "",
         String usdBranch = "master",
         String testsBranch = "master",
-        String platforms = 'Windows:AMD_RX6800XT;OSX:AMD_RX5700XT;Ubuntu20',
+        String platforms = 'Windows:AMD_RX6800XT,APU;OSX:AMD_RX5700XT;Ubuntu20',
         String buildType = "Houdini",
         Boolean rebuildUSD = false,
-        String houdiniVersion = "19.5.303",
+        String houdiniVersions = "19.0.622,19.5.368",
         String updateRefs = 'No',
         String testsPackage = "Full.json",
         String tests = "",
@@ -884,7 +901,7 @@ def call(String projectRepo = PROJECT_REPO,
         Boolean splitTestsExecution = false,
         Boolean incrementVersion = true,
         String parallelExecutionTypeString = "TakeOneNodePerGPU",
-        Boolean enableNotifications = true,
+        Boolean enableNotifications = false,
         Boolean forceBuild = false) {
     ProblemMessageManager problemMessageManager = new ProblemMessageManager(this, currentBuild)
     Map options = [stage: "Init", problemMessageManager: problemMessageManager]
@@ -897,11 +914,13 @@ def call(String projectRepo = PROJECT_REPO,
             }
             
             def parallelExecutionType = TestsExecutionType.valueOf(parallelExecutionTypeString)
-            options << [projectRepo: projectRepo,
+            options << [configuration: PIPELINE_CONFIGURATION,
+                        projectRepo: projectRepo,
                         projectBranch: projectBranch,
                         usdBranch: usdBranch,
                         testRepo:"git@github.com:luxteam/jobs_test_houdini.git",
                         testsBranch: testsBranch,
+                        assetsName: "usd_houdini_autotests",
                         updateRefs: updateRefs,
                         enableNotifications: enableNotifications,
                         PRJ_NAME: "RadeonProRenderUSDPlugin",
@@ -918,7 +937,7 @@ def call(String projectRepo = PROJECT_REPO,
                         TEST_TIMEOUT: 90,
                         buildType: buildType,
                         rebuildUSD: rebuildUSD,
-                        houdiniVersion: houdiniVersion,
+                        houdiniVersions: houdiniVersions.split(",") as List,
                         width: width,
                         gpusCount: gpusCount,
                         height: height,

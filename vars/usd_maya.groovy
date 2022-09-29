@@ -5,26 +5,27 @@ import net.sf.json.JSONSerializer
 import net.sf.json.JsonConfig
 import TestsExecutionType
 import java.util.concurrent.atomic.AtomicInteger
-import org.jenkinsci.plugins.workflow.steps.FlowInterruptedException
 
 
-@Field final String PRODUCT_NAME = "AMD%20Radeon™%20ProRender%20for%20Maya"
+@Field final String PRODUCT_NAME = "AMD%20Radeon™%20ProRender%20Maya%20USD"
 
 @Field final PipelineConfiguration PIPELINE_CONFIGURATION = new PipelineConfiguration(
-    supportedOS: ["Windows", "OSX"],
-    productExtensions: ["Windows": "msi", "OSX": "dmg"],
-    artifactNameBase: "RadeonProRender"
+    supportedOS: ["Windows"],
+    productExtensions: ["Windows": "exe"],
+    artifactNameBase: "RPRMayaUSD_Setup",
+    testProfile: "engine",
+    displayingProfilesMapping: [
+        "engine": [
+            "HybridPro": "HybridPro",
+            "Northstar": "Northstar"
+        ]
+    ]
 )
 
 
 Boolean filter(Map options, String asicName, String osName, String testName, String engine) {
-    if (engine.contains("HIP") && !(asicName.contains("AMD") && osName == "Windows")) {
-        return true
-    }
-
-    return false
+    return (engine == "HybridPro" && !(asicName.contains("RTX") || asicName.contains("AMD_RX6800")))
 }
-
 
 def executeGenTestRefCommand(String osName, Map options, Boolean delete)
 {
@@ -45,71 +46,105 @@ def executeGenTestRefCommand(String osName, Map options, Boolean delete)
     }
 }
 
-def buildRenderCache(String osName, String toolVersion, String log_name, Integer currentTry, String engine)
-{
-    def maxCBTries = 3
-    def currentCBTry = 0
-
-    while (currentCBTry < maxCBTries) {
-        try {
-            timeout(time: "7", unit: "MINUTES") {
-                dir("scripts") {
-                    switch(osName) {
-                        case 'Windows':
-                            bat """
-                                ${engine.contains("HIP") ? "set TH_FORCE_HIP=1" : ""}
-                                build_rpr_cache.bat ${toolVersion} ${engine} >> \"..\\${log_name}_${currentTry}.cb.log\"  2>&1
-                            """
-                            break
-                        case 'OSX':
-                            sh """
-                                ${engine.contains("HIP") ? "export TH_FORCE_HIP=1" : ""}
-                                ./build_rpr_cache.sh ${toolVersion} ${engine} >> \"../${log_name}_${currentTry}.cb.log\" 2>&1
-                            """
-                            break
-                        default:
-                            println "[WARNING] ${osName} is not supported"
-                    }
-                }
-            }
-
+def uninstallRPRMayaPlugin(String osName, Map options) {
+    println "[INFO] Uninstalling RPR Maya plugin"
+    switch(osName) {
+        case 'Windows':
+            uninstallMSI("Radeon%Maya%", options.stageName, options.currentTry)
             break
-        } catch (FlowInterruptedException e) {
-            e.getCauses().each() {
-                String causeClassName = it.getClass().toString()
-                
-                if (causeClassName.contains("UserInterruption")) {
-                    throw e
-                }
-            }
-        } catch (e) {
-            currentCBTry++
-
-            if (currentCBTry >= maxCBTries) {
-                String cacheBuildingLog = readFile("${log_name}_${currentTry}.cb.log")
-                if (cacheBuildingLog.contains("Cannot open renderer description file \"FireRenderRenderer.xml\"")) {
-                    throw new ExpectedExceptionWrapper(NotificationConfiguration.PLUGIN_NOT_FOUND, e)
-                }
-                throw e
-            }
-        }
+        default:
+            println "[WARNING] ${osName} is not supported"
     }
 }
 
-def executeTestCommand(String osName, String asicName, Map options)
-{
-    def testTimeout = options.timeouts["${options.parsedTests}"]
-    String testsNames = options.parsedTests
-    String testsPackageName = options.testsPackage
+def installRPRMayaUSDPlugin(String osName, Map options) {
+
+    if (options['isPreBuilt']) {
+        options['pluginWinSha'] = "${options[getProduct.getIdentificatorKey('Windows', options)]}"
+    } else {
+        options['pluginWinSha'] = "${options.commitSHA}"
+    }
+
+    try {
+        println "[INFO] Install RPR Maya USD Plugin"
+
+        bat """
+            start /wait ${CIS_TOOLS}\\..\\PluginsBinaries\\${options.pluginWinSha}.exe /SILENT /NORESTART /LOG=${options.stageName}_${options.currentTry}.install.log
+        """
+
+    } catch (e) {
+        throw new Exception("Failed to install plugin")
+    }
+
+    String modulesPath = "C:\\Program Files\\Common Files\\Autodesk Shared\\Modules\\maya\\${options.toolVersion}"
+
+    // Move mayausd.mod due to conflict with RPRMayaUSD.mod
+    status = bat(returnStatus: true, script: "MOVE /Y \"${modulesPath}\\mayausd.mod\" \"${modulesPath}\\..\"")
+    
+    if (status == 0) {
+        println "[INFO] mayausd.mod moved"
+    } else {
+        println "[INFO] mayausd.mod not found"
+    }
+}
+
+def uninstallRPRMayaUSDPlugin(String osName, Map options) {
+    println "[INFO] Uninstalling RPR Maya USD plugin"
+    switch(osName) {
+        case "Windows":
+            String defaultUninstallerPath = "C:\\Program Files\\RPRMayaUSD\\unins000.exe"
+
+            try {
+                if (fileExists(defaultUninstallerPath)) {
+                    bat """
+                        start "" /wait "${defaultUninstallerPath}" /SILENT
+                    """
+                } else {
+                    println "[INFO] RPR Maya USD plugin not found"
+                }
+            } catch (e) {
+                throw new Exception("Failed to uninstall RPR Maya USD plugin")
+            }
+            break
+        default:
+            println "[WARNING] ${osName} is not supported for RPR Maya USD"
+    }
+}
+
+def buildRenderCache(String osName, String toolVersion, String log_name, Integer currentTry, String engine) {
+    try {
+        dir("scripts") {
+            switch(osName) {
+                case 'Windows':
+                    bat "build_rpr_cache.bat ${toolVersion} ${engine} >> \"..\\${log_name}_${currentTry}.cb.log\"  2>&1"
+                    break
+                default:
+                    println "[WARNING] ${osName} is not supported"
+            }
+        }
+    } catch (e) {
+        throw e
+    }
+}
+
+def executeTestCommand(String osName, String asicName, Map options) {
+    def testTimeout = options.timeouts["${options.tests}"]
+    String testsNames
+    String testsPackageName
+
     if (options.testsPackage != "none" && !options.isPackageSplitted) {
-        if (options.parsedTests.contains(".json")) {
+        if (options.tests.contains(".json")) {
             // if tests package isn't splitted and it's execution of this package - replace test package by test group and test group by empty string
-            testsPackageName = options.parsedTests
+            testsPackageName = options.tests
             testsNames = ""
         } else {
             // if tests package isn't splitted and it isn't execution of this package - replace tests package by empty string
             testsPackageName = "none"
+            testsNames = options.tests
         }
+    } else {
+        testsPackageName = "none"
+        testsNames = options.tests
     }
 
     println "Set timeout to ${testTimeout}"
@@ -119,16 +154,7 @@ def executeTestCommand(String osName, String asicName, Map options)
             case 'Windows':
                 dir('scripts') {
                     bat """
-                        ${options.engine.contains("HIP") ? "set TH_FORCE_HIP=1" : ""}
                         run.bat ${options.renderDevice} \"${testsPackageName}\" \"${testsNames}\" ${options.resX} ${options.resY} ${options.SPU} ${options.iter} ${options.theshold} ${options.toolVersion} ${options.engine} ${options.testCaseRetries} ${options.updateRefs} 1>> \"../${options.stageName}_${options.currentTry}.log\"  2>&1
-                    """
-                }
-                break
-            case 'OSX':
-                dir('scripts') {
-                    sh """
-                        ${options.engine.contains("HIP") ? "export TH_FORCE_HIP=1" : ""}
-                        ./run.sh ${options.renderDevice} \"${testsPackageName}\" \"${testsNames}\" ${options.resX} ${options.resY} ${options.SPU} ${options.iter} ${options.theshold} ${options.toolVersion} ${options.engine} ${options.testCaseRetries} ${options.updateRefs} 1>> \"../${options.stageName}_${options.currentTry}.log\" 2>&1
                     """
                 }
                 break
@@ -138,90 +164,40 @@ def executeTestCommand(String osName, String asicName, Map options)
     }
 }
 
-
-def cloneTestsRepository(Map options) {
-    checkoutScm(branchName: options.testsBranch, repositoryUrl: options.testRepo)
-
-    if (options.parsedTests.contains("RPR_Export") || options.parsedTests.contains("regression.0")) {
-        dir("RadeonProRenderSDK") {
-            if (options["isPreBuilt"]) {
-                checkoutScm(branchName: "master", repositoryUrl: rpr_core_pipeline.RPR_SDK_REPO)
-            } else {
-                checkoutScm(branchName: options.rprsdkCommitSHA, repositoryUrl: rpr_core_pipeline.RPR_SDK_REPO)
-            }
-        }
-    }
-}
-
-
-def executeTests(String osName, String asicName, Map options)
-{
-    options.parsedTests = options.tests.split("-")[0]
-    options.engine = options.tests.split("-")[1]
-
+def executeTests(String osName, String asicName, Map options) {
     // used for mark stash results or not. It needed for not stashing failed tasks which will be retried.
     Boolean stashResults = true
-    
     try {
-        // FIXME: too many random errors on Maya on Mac machines
-        if (osName == "OSX") {
-            utils.reboot(this, osName)
-        }
-
-        // FIXME: remove this ducktape when CPUs on that machines will be changes
-        if (env.NODE_NAME == "PC-TESTER-MILAN-WIN10") {
-            if (options.parsedTests.contains("VDB") || options.parsedTests.contains("regression.2")) {
-                throw new ExpectedExceptionWrapper(
-                    "System doesn't support VDB group", 
-                    new Exception("System doesn't support VDB group")
-                )
-            }
-        }
-
         withNotifications(title: options["stageName"], options: options, logUrl: "${BUILD_URL}", configuration: NotificationConfiguration.DOWNLOAD_TESTS_REPO) {
-            timeout(time: "15", unit: "MINUTES") {
-                try {
-                    if (osName == "OSX" && asicName == "AppleM1") {
-                        sh """
-                            pkill -f /Applications/Autodesk/maya2022/Maya.app/Contents/MacOS/Maya; sleep 1; pkill -f /Applications/Autodesk/maya2022/Maya.app/Contents/MacOS/Maya
-                            pkill -f /Applications/Autodesk/maya2020/Maya.app/Contents/MacOS/Maya; sleep 1; pkill -f /Applications/Autodesk/maya2020/Maya.app/Contents/MacOS/Maya
-                            pkill -f /Applications/Autodesk/maya2019/Maya.app/Contents/MacOS/Maya; sleep 1; pkill -f /Applications/Autodesk/maya2019/Maya.app/Contents/MacOS/Maya
-                        """
-                    }
-                } catch (e) {
-                    // just try to close Maya if it's opened
-                }
-                
+            timeout(time: "15", unit: "MINUTES") {                
                 cleanWS(osName)
-                cloneTestsRepository(options)
+                checkoutScm(branchName: options.testsBranch, repositoryUrl: options.testRepo)
             }
         }
 
         withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.DOWNLOAD_SCENES) {
-            String assets_dir = isUnix() ? "${CIS_TOOLS}/../TestResources/rpr_maya_autotests_assets" : "/mnt/c/TestResources/rpr_maya_autotests_assets"
-            downloadFiles("/volume1/web/Assets/rpr_maya_autotests/", assets_dir)
+            String assets_dir = isUnix() ? "${CIS_TOOLS}/../TestResources/usd_maya_autotests" : "/mnt/c/TestResources/usd_maya_autotests"
+            downloadFiles("/volume1/web/Assets/usd_maya_autotests/", assets_dir)
         }
-
-        withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.DOWNLOAD_PREFERENCES) {
-            timeout(time: "5", unit: "MINUTES") {
-                String prefsDir = isUnix() ? "/Users/${env.USER}/Library/Preferences/Autodesk/Maya/${options.toolVersion}/prefs" : "/mnt/c/Users/${env.USERNAME}/Documents/Maya/${options.toolVersion}/prefs"
-                String customKeys = isUnix() ? "--protect-args" : ""
-                downloadFiles("/volume1/CIS/tools-preferences/Maya/${osName}/${options.toolVersion}/prefs/*", prefsDir, customKeys, false)
-            }
-        }
-
         try {
             Boolean newPluginInstalled = false
-            withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.INSTALL_PLUGIN) {
-                timeout(time: "15", unit: "MINUTES") {
-                    rpr_mayausd_pipeline.uninstallRPRMayaUSDPlugin(osName, options)
-                }
-
+            withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.DOWNLOAD_PACKAGE) {
                 timeout(time: "15", unit: "MINUTES") {
                     getProduct(osName, options)
-                    newPluginInstalled = installMSIPlugin(osName, "Maya", options)
-                    println "[INFO] Install function on ${env.NODE_NAME} return ${newPluginInstalled}"
                 }
+            }
+
+            timeout(time: "15", unit: "MINUTES") {
+                uninstallRPRMayaPlugin(osName, options)
+                uninstallRPRMayaUSDPlugin(osName, options)
+            }
+
+            println "Start plugin installation"
+
+            timeout(time: "15", unit: "MINUTES") {
+                installRPRMayaUSDPlugin(osName, options)
+                newPluginInstalled = true
+                removeInstaller(osName: osName, options: options)
             }
 
             withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.BUILD_CACHE) {
@@ -232,41 +208,28 @@ def executeTests(String osName, String asicName, Map options)
                         buildRenderCache(osName, options.toolVersion, options.stageName, options.currentTry, options.engine)
                         if(!fileExists(cacheImgPath)){
                             throw new ExpectedExceptionWrapper(NotificationConfiguration.NO_OUTPUT_IMAGE, new Exception(NotificationConfiguration.NO_OUTPUT_IMAGE))
-                        } else {
-                            verifyMatlib("Maya", cacheImgPath, 50, osName, options)
                         }
                     }
                 }
             }
-            
         } catch(e) {
             println(e.toString())
             println("[ERROR] Failed to install plugin on ${env.NODE_NAME}.")
             // deinstalling broken addon
-            installMSIPlugin(osName, "Maya", options, false, true)
+            uninstallRPRMayaUSDPlugin(osName, options)
             // remove installer of broken addon
             removeInstaller(osName: osName, options: options)
             throw e
         }
 
         String enginePostfix = ""
-        String REF_PATH_PROFILE="/volume1/Baselines/rpr_maya_autotests/${asicName}-${osName}"
+        String REF_PATH_PROFILE="/volume1/Baselines/usd_maya_autotests/${asicName}-${osName}"
         switch(options.engine) {
             case 'Northstar':
-            case 'HIPvsNS':
                 enginePostfix = "NorthStar"
                 break
-            case 'Hybrid_Low':
-                enginePostfix = "HybridLow"
-                break
-            case 'Hybrid_Medium':
-                enginePostfix = "HybridMedium"
-                break
-            case 'Hybrid_High':
-                enginePostfix = "HybridHigh"
-                break
-            case 'HIP':
-                enginePostfix = "HIP"
+            case 'HybridPro':
+                enginePostfix = "HybridPro"
                 break
         }
         REF_PATH_PROFILE = enginePostfix ? "${REF_PATH_PROFILE}-${enginePostfix}" : REF_PATH_PROFILE
@@ -284,17 +247,16 @@ def executeTests(String osName, String asicName, Map options)
                 switch(osName) {
                     case "Windows":
                         bat "if exist Work\\GeneratedBaselines rmdir /Q /S Work\\GeneratedBaselines"
-                        break
-                    default:
-                        sh "rm -rf ./Work/GeneratedBaselines"        
+                        break       
                 }
             }
         } else {
             withNotifications(title: options["stageName"], printMessage: true, options: options, configuration: NotificationConfiguration.COPY_BASELINES) {
-                String baseline_dir = isUnix() ? "${CIS_TOOLS}/../TestResources/rpr_maya_autotests_baselines" : "/mnt/c/TestResources/rpr_maya_autotests_baselines"
+                String baseline_dir = "/mnt/c/TestResources/usd_maya_autotests_baselines"
                 baseline_dir = enginePostfix ? "${baseline_dir}-${enginePostfix}" : baseline_dir
-                println "[INFO] Downloading reference images for ${options.parsedTests}"
-                options.parsedTests.split(" ").each() {
+                println "[INFO] Downloading reference images for ${options.tests}-${options.engine}"
+
+                options.tests.split(" ").each() {
                     if (it.contains(".json")) {
                         downloadFiles("${REF_PATH_PROFILE}/", baseline_dir)
                     } else {
@@ -314,7 +276,6 @@ def executeTests(String osName, String asicName, Map options)
             // mark that one group was finished and counting of errored groups in succession must be stopped
             options["errorsInSuccession"]["${osName}-${asicName}-${options.engine}"] = new AtomicInteger(-1)
         }
-
     } catch (e) {
         String additionalDescription = ""
         if (options.currentTry + 1 < options.nodeReallocateTries) {
@@ -383,17 +344,15 @@ def executeTests(String osName, String asicName, Map options)
                         }
 
                         println("Stashing test results to : ${options.testResultsName}")
-                        utils.stashTestData(this, options, options.storeOnNAS, "**/rpr_export_scenes/**,**/cache/**")
+                        utils.stashTestData(this, options, options.storeOnNAS)
 
                         // deinstalling broken addon
                         // if test group is fully errored or number of test cases is equal to zero
                         if (sessionReport.summary.total == sessionReport.summary.error + sessionReport.summary.skipped || sessionReport.summary.total == 0) {
                             // check that group isn't fully skipped
                             if (sessionReport.summary.total != sessionReport.summary.skipped || sessionReport.summary.total == 0){
-                                collectCrashInfo(osName, options, options.currentTry)
-                                installMSIPlugin(osName, "Maya", options, false, true)
-                                // remove installer of broken addon
-                                removeInstaller(osName: osName, options: options)
+                                uninstallRPRMayaUSDPlugin(osName, options)
+                                removeInstaller(osName: osName, options: options, extension: "exe")
                                 String errorMessage
                                 if (options.currentTry < options.nodeReallocateTries) {
                                     errorMessage = "All tests were marked as error. The test group will be restarted."
@@ -404,32 +363,13 @@ def executeTests(String osName, String asicName, Map options)
                             }
                         }
 
-                        // retry on Maya crash
-                        if (sessionReport.summary.error > 0) {
-                            for (testGroup in sessionReport.results) {
-                                for (caseResults in sessionReport.results[testGroup].renderResults) {
-                                    for (message in caseResults.message) {
-                                        if (message.contains("Error windows {'maya'}")) {
-                                            String errorMessage
-                                            if (options.currentTry < options.nodeReallocateTries) {
-                                                errorMessage = "Maya crash detected. The test group will be restarted."
-                                            } else {
-                                                errorMessage = "Maya crash detected."
-                                            }
-                                            throw new ExpectedExceptionWrapper(errorMessage, new Exception(errorMessage))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
                         if (options.reportUpdater) {
                             options.reportUpdater.updateReport(options.engine)
                         }
                     }
                 }
             } else {
-                println "[INFO] Task ${options.tests} will be retried."
+                println "[INFO] Task ${options.tests}-${options.engine} on ${options.nodeLabels} labels will be retried."
             }
         } catch (e) {
             // throw exception in finally block only if test stage was finished
@@ -446,80 +386,81 @@ def executeTests(String osName, String asicName, Map options)
     }
 }
 
-def executeBuildWindows(Map options)
-{
-    dir('RadeonProRenderMayaPlugin\\MayaPkg') {
-        GithubNotificator.updateStatus("Build", "Windows", "in_progress", options, NotificationConfiguration.BUILD_SOURCE_CODE_START_MESSAGE, "${BUILD_URL}/artifact/Build-Windows.log")
-        bat """
-            build_windows_installer.cmd >> ../../${STAGE_NAME}.log  2>&1
-        """
+def executeBuildWindows(Map options) {
+    dir('RPRMayaUSD') {
+        // Temporary remove system python from PATH (otherwise it can affect building of plugin)
+        withEnv(["PATH=C:\\Program Files (x86)\\Inno Setup 6\\;${PATH.replace('Python', '')}"]) {
+            outputEnvironmentInfo("Windows", "${STAGE_NAME}.EnvVariables")
 
-        if (options.branch_postfix) {
-            bat """
-                rename RadeonProRender*msi *.(${options.branch_postfix}).msi
-            """
-        }
+            withNotifications(title: "Windows", options: options, logUrl: "${BUILD_URL}/artifact/${STAGE_NAME}.log", configuration: NotificationConfiguration.BUILD_SOURCE_CODE) {
+                bat """
+                    call "C:\\Program Files (x86)\\Microsoft Visual Studio\\2017\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat" >> ..\\${STAGE_NAME}.EnvVariables.log 2>&1
 
-        String ARTIFACT_NAME = options.branch_postfix ? "RadeonProRenderMaya_${options.pluginVersion}.(${options.branch_postfix}).msi" : "RadeonProRenderMaya_${options.pluginVersion}.msi"
-        String artifactURL = makeArchiveArtifacts(name: ARTIFACT_NAME, storeOnNAS: options.storeOnNAS)
-
-        bat """
-            rename RadeonProRender*.msi RadeonProRenderMaya.msi
-        """
-
-        bat """
-            echo import msilib >> getMsiProductCode.py
-            echo db = msilib.OpenDatabase(r'RadeonProRenderMaya.msi', msilib.MSIDBOPEN_READONLY) >> getMsiProductCode.py
-            echo view = db.OpenView("SELECT Value FROM Property WHERE Property='ProductCode'") >> getMsiProductCode.py
-            echo view.Execute(None) >> getMsiProductCode.py
-            echo print(view.Fetch().GetString(1)) >> getMsiProductCode.py
-        """
-
-        // FIXME: hot fix for STVCIS-1215
-        options[getProduct.getIdentificatorKey("Windows")] = python3("getMsiProductCode.py").split('\r\n')[2].trim()[1..-2]
-
-        println "[INFO] Built MSI product code: ${options.productCode}"
-
-        makeStash(includes: 'RadeonProRenderMaya.msi', name: getProduct.getStashName("Windows"), preZip: false, storeOnNAS: options.storeOnNAS)
-
-        GithubNotificator.updateStatus("Build", "Windows", "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
-    }
-}
-
-def executeBuildOSX(Map options)
-{
-    dir('RadeonProRenderMayaPlugin/MayaPkg') {
-        GithubNotificator.updateStatus("Build", "OSX", "in_progress", options, NotificationConfiguration.BUILD_SOURCE_CODE_START_MESSAGE, "${BUILD_URL}/artifact/Build-OSX.log")
-        sh """
-            ./build_osx_installer.sh >> ../../${STAGE_NAME}.log 2>&1
-        """
-
-        dir('.installer_build') {
-            if (options.branch_postfix) {
-                sh"""
-                    for i in RadeonProRender*; do name="\${i%.*}"; mv "\$i" "\${name}.(${options.branch_postfix})\${i#\$name}"; done
+                    build_with_devkit.bat > ..\\${STAGE_NAME}.devkit.log 2>&1
                 """
             }
+            dir('installation') {
+                bat """
+                    rename RPRMayaUSDHdRPR_Setup* RPRMayaUSDHdRPR_Setup_${options.hdrprPluginVersion}.exe
+                """
 
-            String ARTIFACT_NAME = options.branch_postfix ? "RadeonProRenderMaya_${options.pluginVersion}.(${options.branch_postfix}).dmg" : "RadeonProRenderMaya_${options.pluginVersion}.dmg"
-            String artifactURL = makeArchiveArtifacts(name: ARTIFACT_NAME, storeOnNAS: options.storeOnNAS)
+                if (options.branch_postfix) {
+                    bat """
+                        rename RPRMayaUSDHdRPR_Setup_${options.hdrprPluginVersion}.exe RPRMayaUSDHdRPR_Setup_${options.hdrprPluginVersion}_(${options.branch_postfix}).exe
+                    """
+                }
 
-            sh "cp RadeonProRender*.dmg RadeonProRenderMaya.dmg"
-            makeStash(includes: 'RadeonProRenderMaya.dmg', name: getProduct.getStashName("OSX"), preZip: false, storeOnNAS: options.storeOnNAS)
+                String ARTIFACT_NAME = options.branch_postfix ? "RPRMayaUSDHdRPR_Setup_${options.hdrprPluginVersion}_(${options.branch_postfix}).exe" : "RPRMayaUSDHdRPR_Setup_${options.hdrprPluginVersion}.exe"
+                String artifactURL = makeArchiveArtifacts(name: ARTIFACT_NAME, storeOnNAS: options.storeOnNAS)
+            }
 
-            // TODO: detect ID of installed plugin
-            options[getProduct.getIdentificatorKey("OSX")] = options.commitSHA
+            // vcvars64.bat sets VS/msbuild env
+            withNotifications(title: "Windows", options: options, logUrl: "${BUILD_URL}/artifact/${STAGE_NAME}.log", configuration: NotificationConfiguration.BUILD_SOURCE_CODE) {
+                // FIXME: patch TIFF url, because it's invalid. This code must be removed when USD submodule will be updated
+                String buildScriptContent = readFile(file: "USD/build_scripts/build_usd.py")
 
-            GithubNotificator.updateStatus("Build", "OSX", "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
+                buildScriptContent = buildScriptContent.replace(
+                    "https://gitlab.com/libtiff/libtiff/-/archive/Release-v4-0-7/libtiff-Release-v4-0-7.tar.gz",
+                    "https://gitlab.com/libtiff/libtiff/-/archive/v4.0.7/libtiff-v4.0.7.tar.gz"
+                )
+
+                writeFile(file: "USD/build_scripts/build_usd.py", text: buildScriptContent)
+
+                bat """
+                    call "C:\\Program Files (x86)\\Microsoft Visual Studio\\2017\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat" >> ..\\${STAGE_NAME}.EnvVariables.log 2>&1
+
+                    build.bat > ..\\${STAGE_NAME}.log 2>&1
+                """
+            }
+            dir('installation') {
+                bat """
+                    rename RPRMayaUSD_Setup* RPRMayaUSD_Setup.exe
+                """
+
+                makeStash(includes: "RPRMayaUSD_Setup.exe", name: getProduct.getStashName("Windows", options), preZip: false, storeOnNAS: options.storeOnNAS)
+
+                if (options.branch_postfix) {
+                    bat """
+                        rename RPRMayaUSD_Setup.exe RPRMayaUSD_Setup_${options.usdPluginVersion}_(${options.branch_postfix}).exe
+                    """
+                } else {
+                    bat """
+                        rename RPRMayaUSD_Setup.exe RPRMayaUSD_Setup_${options.usdPluginVersion}.exe
+                    """
+                }
+
+                String ARTIFACT_NAME = options.branch_postfix ? "RPRMayaUSD_Setup_${options.usdPluginVersion}_(${options.branch_postfix}).exe" : "RPRMayaUSD_Setup_${options.usdPluginVersion}.exe"
+                String artifactURL = makeArchiveArtifacts(name: ARTIFACT_NAME, storeOnNAS: options.storeOnNAS)
+
+                GithubNotificator.updateStatus("Build", "Windows", "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
+            }
         }
     }
 }
 
-
-def executeBuild(String osName, Map options)
-{
+def executeBuild(String osName, Map options) {
     try {
-        dir("RadeonProRenderMayaPlugin") {
+        dir("RPRMayaUSD") {
             withNotifications(title: osName, options: options, configuration: NotificationConfiguration.DOWNLOAD_SOURCE_CODE_REPO) {
                 checkoutScm(branchName: options.projectBranch, repositoryUrl: options.projectRepo, prBranchName: options.prBranchName, prRepoName: options.prRepoName)
             }
@@ -532,13 +473,12 @@ def executeBuild(String osName, Map options)
                 case "Windows":
                     executeBuildWindows(options)
                     break
-                case "OSX":
-                    executeBuildOSX(options)
-                    break
                 default:
                     println "[WARNING] ${osName} is not supported"
             }
         }
+
+        options[getProduct.getIdentificatorKey(osName, options)] = options.commitSHA
     } catch (e) {
         throw e
     } finally {
@@ -550,18 +490,13 @@ def getReportBuildArgs(String engineName, Map options) {
     boolean collectTrackedMetrics = (env.JOB_NAME.contains("Weekly") || (env.JOB_NAME.contains("Manual") && options.testsPackageOriginal == "Full.json"))
 
     if (options["isPreBuilt"]) {
-        return """"Maya" "PreBuilt" "PreBuilt" "PreBuilt" \"${utils.escapeCharsByUnicode(engineName)}\" ${collectTrackedMetrics ? env.BUILD_NUMBER : ""}"""
+        return """"MayaUSD" "PreBuilt" "PreBuilt" "PreBuilt" \"${utils.escapeCharsByUnicode(engineName)}\" ${collectTrackedMetrics ? env.BUILD_NUMBER : ""}"""
     } else {
-        return """"Maya" ${options.commitSHA} ${options.projectBranchName} \"${utils.escapeCharsByUnicode(options.commitMessage)}\" \"${utils.escapeCharsByUnicode(engineName)}\" ${collectTrackedMetrics ? env.BUILD_NUMBER : ""}"""
+        return """"MayaUSD" ${options.commitSHA} ${options.projectBranchName} \"${utils.escapeCharsByUnicode(options.commitMessage)}\" \"${utils.escapeCharsByUnicode(engineName)}\" ${collectTrackedMetrics ? env.BUILD_NUMBER : ""}"""
     }
 }
 
-def executePreBuild(Map options)
-{
-    if (env.BRANCH_NAME && env.BRANCH_NAME.contains("PR-208")) {
-        options.toolVersion = "2022"
-    }
-
+def executePreBuild(Map options) {
     // manual job with prebuilt plugin
     if (options.isPreBuilt) {
         println "[INFO] Build was detected as prebuilt. Build stage will be skipped"
@@ -579,32 +514,32 @@ def executePreBuild(Map options)
             println "[INFO] Branch was detected as Pull Request"
             options['executeBuild'] = true
             options['executeTests'] = true
-            options['testsPackage'] = "regression.json"
-        } else if (env.BRANCH_NAME == "master" || env.BRANCH_NAME == "develop") {
+            options['testsPackage'] = "Full.json"
+        } else if (env.BRANCH_NAME == "main" || env.BRANCH_NAME == "develop") {
            println "[INFO] ${env.BRANCH_NAME} branch was detected"
            options['executeBuild'] = true
            options['executeTests'] = true
-           options['testsPackage'] = "regression.json"
+           options['testsPackage'] = "Full.json"
         } else {
             println "[INFO] ${env.BRANCH_NAME} branch was detected"
-            options['testsPackage'] = "regression.json"
+            options['testsPackage'] = "Full.json"
         }
     }
 
     // branch postfix
     options["branch_postfix"] = ""
-    if (env.BRANCH_NAME && env.BRANCH_NAME == "master") {
+    if (env.BRANCH_NAME && env.BRANCH_NAME == "main") {
         options["branch_postfix"] = "release"
-    } else if(env.BRANCH_NAME && env.BRANCH_NAME != "master" && env.BRANCH_NAME != "develop") {
+    } else if(env.BRANCH_NAME && env.BRANCH_NAME != "main" && env.BRANCH_NAME != "develop") {
         options["branch_postfix"] = env.BRANCH_NAME.replace('/', '-')
-    } else if(options.projectBranch && options.projectBranch != "master" && options.projectBranch != "develop") {
+    } else if(options.projectBranch && options.projectBranch != "main" && options.projectBranch != "develop") {
         options["branch_postfix"] = options.projectBranch.replace('/', '-')
     }
 
     if (!options['isPreBuilt']) {
-        dir('RadeonProRenderMayaPlugin') {
+        dir('RPRMayaUSD') {
             withNotifications(title: "Jenkins build configuration", options: options, configuration: NotificationConfiguration.DOWNLOAD_SOURCE_CODE_REPO) {
-                checkoutScm(branchName: options.projectBranch, repositoryUrl: options.projectRepo, prBranchName: options.prBranchName, prRepoName: options.prRepoName)
+                checkoutScm(branchName: options.projectBranch, repositoryUrl: options.projectRepo, prBranchName: options.prBranchName, prRepoName: options.prRepoName, disableSubmodules: true)
             }
 
             options.commitAuthor = bat (script: "git show -s --format=%%an HEAD ",returnStdout: true).split('\r\n')[2].trim()
@@ -613,10 +548,6 @@ def executePreBuild(Map options)
             options.commitShortSHA = options.commitSHA[0..6]
             options.branchName = env.BRANCH_NAME ?: options.projectBranch
 
-            dir("RadeonProRenderSDK") {
-                options.rprsdkCommitSHA = bat (script: "git log --format=%%H -1 ", returnStdout: true).split('\r\n')[2].trim()
-            }
-
             println "The last commit was written by ${options.commitAuthor}."
             println "Commit message: ${options.commitMessage}"
             println "Commit SHA: ${options.commitSHA}"
@@ -624,7 +555,9 @@ def executePreBuild(Map options)
             println "Branch name: ${options.branchName}"
 
             withNotifications(title: "Jenkins build configuration", options: options, configuration: NotificationConfiguration.INCREMENT_VERSION) {
-                options.pluginVersion = version_read("${env.WORKSPACE}\\RadeonProRenderMayaPlugin\\version.h", '#define PLUGIN_VERSION')
+                // Temporary hardcode version due to different formats of version in master and PR-8
+                options.usdPluginVersion = version_read("${env.WORKSPACE}\\RPRMayaUSD\\installation\\installation.iss", '#define AppVersionString ').replace("\'", "")
+                options.hdrprPluginVersion = version_read("${env.WORKSPACE}\\RPRMayaUSD\\installation\\installation_hdrpr_only.iss", '#define AppVersionString ').replace("\'", "")
 
                 if (options['incrementVersion']) {
                     withNotifications(title: "Jenkins build configuration", printMessage: true, options: options, configuration: NotificationConfiguration.CREATE_GITHUB_NOTIFICATOR) {
@@ -636,21 +569,28 @@ def executePreBuild(Map options)
                     }
                     
                     if(env.BRANCH_NAME == "develop" && options.commitAuthor != "radeonprorender") {
-
+                        // Do not have permissions to make a new commit
                         println "[INFO] Incrementing version of change made by ${options.commitAuthor}."
-                        println "[INFO] Current build version: ${options.pluginVersion}"
+                        println "[INFO] Current USD plugin version: ${options.usdPluginVersion}"
+                        println "[INFO] Current HdRPR plugin version: ${options.hdrprPluginVersion}"
 
-                        def new_version = version_inc(options.pluginVersion, 3)
-                        println "[INFO] New build version: ${new_version}"
-                        version_write("${env.WORKSPACE}\\RadeonProRenderMayaPlugin\\version.h", '#define PLUGIN_VERSION', new_version)
+                        def newUsdPluginVersion = version_inc(options.usdPluginVersion, 3)
+                        def newHdrprPluginVersion = version_inc(options.hdrprPluginVersion, 3)
+                        println "[INFO] New USD plugin version: ${newUsdPluginVersion}"
+                        println "[INFO] New HdRPR plugin version: ${newHdrprPluginVersion}"
+                        version_write("${env.WORKSPACE}\\RPRMayaUSD\\installation\\installation.iss", '#define AppVersionString ', "${newUsdPluginVersion}")
+                        version_write("${env.WORKSPACE}\\RPRMayaUSD\\installation\\installation_hdrpr_only.iss", '#define AppVersionString ', "${newHdrprPluginVersion}")
 
-                        options.pluginVersion = version_read("${env.WORKSPACE}\\RadeonProRenderMayaPlugin\\version.h", '#define PLUGIN_VERSION')
-                        println "[INFO] Updated build version: ${options.pluginVersion}"
+                        options.usdPluginVersion = version_read("${env.WORKSPACE}\\RPRMayaUSD\\installation\\installation.iss", '#define AppVersionString ').replace("\'", "")
+                        options.hdrprPluginVersion = version_read("${env.WORKSPACE}\\RPRMayaUSD\\installation\\installation_hdrpr_only.iss", '#define AppVersionString ').replace("\'", "")
+                        println "[INFO] Updated USD plugin version: ${options.usdPluginVersion}"
+                        println "[INFO] Updated HdRPR plugin version: ${options.hdrprPluginVersion}"
 
                         bat """
-                          git add version.h
-                          git commit -m "buildmaster: version update to ${options.pluginVersion}"
-                          git push origin HEAD:develop
+                            git add ${env.WORKSPACE}\\RPRMayaUSD\\installation\\installation.iss
+                            git add ${env.WORKSPACE}\\RPRMayaUSD\\installation\\installation_hdrpr_only.iss
+                            git commit -m "buildmaster: USD plugin version update to ${options.usdPluginVersion}. HdRPR plugin version update to ${options.hdrprPluginVersion}."
+                            git push origin HEAD:develop
                         """
 
                         //get commit's sha which have to be build
@@ -675,19 +615,20 @@ def executePreBuild(Map options)
                 }
 
                 currentBuild.description = "<b>Project branch:</b> ${options.projectBranchName}<br/>"
-                currentBuild.description += "<b>Version:</b> ${options.pluginVersion}<br/>"
+                currentBuild.description += "<b>USD plugin version:</b> ${options.usdPluginVersion}<br/>"
+                currentBuild.description += "<b>HdRPR plugin version:</b> ${options.hdrprPluginVersion}<br/>"
                 currentBuild.description += "<b>Commit author:</b> ${options.commitAuthor}<br/>"
                 currentBuild.description += "<b>Commit message:</b> ${options.commitMessage}<br/>"
                 currentBuild.description += "<b>Commit SHA:</b> ${options.commitSHA}<br/>"
             }
         }
     }
-    
+
     def tests = []
     options.timeouts = [:]
 
     withNotifications(title: "Jenkins build configuration", options: options, configuration: NotificationConfiguration.CONFIGURE_TESTS) {
-        dir('jobs_test_maya')  {
+        dir('jobs_test_usdmaya')  {
             checkoutScm(branchName: options.testsBranch, repositoryUrl: options.testRepo)
 
             options['testsBranch'] = bat (script: "git log --format=%%H -1 ", returnStdout: true).split('\r\n')[2].trim()
@@ -798,26 +739,28 @@ def executePreBuild(Map options)
             options.tests = tests
         }
 
-        if (env.BRANCH_NAME && options.githubNotificator) {
-            options.githubNotificator.initChecks(options, "${BUILD_URL}")
-        }
-
         options.testsList = options.tests
 
         println "timeouts: ${options.timeouts}"
     }
 
+    // make lists of raw profiles and lists of beautified profiles (displaying profiles)
+    multiplatform_pipeline.initProfiles(options)
+
     if (options.flexibleUpdates && multiplatform_pipeline.shouldExecuteDelpoyStage(options)) {
         options.reportUpdater = new ReportUpdater(this, env, options)
         options.reportUpdater.init(this.&getReportBuildArgs)
     }
+
+    if (env.BRANCH_NAME && options.githubNotificator) {
+        options.githubNotificator.initChecks(options, "${BUILD_URL}")
+    }
 }
 
-def executeDeploy(Map options, List platformList, List testResultList, String engine)
-{
+def executeDeploy(Map options, List platformList, List testResultList, String engine) {
     cleanWS()
     try {
-        String engineName = options.enginesNames[options.engines.indexOf(engine)]
+        String engineName = options.displayingTestProfiles[engine]
 
         if (options['executeTests'] && testResultList) {
             withNotifications(title: "Building test report for ${engineName}", options: options, startUrl: "${BUILD_URL}", configuration: NotificationConfiguration.DOWNLOAD_TESTS_REPO) {
@@ -827,7 +770,6 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
             List lostStashes = []
 
             dir("summaryTestResults") {
-                unstashCrashInfo(options['nodeRetry'], engine)
                 testResultList.each() {
                     if (it.endsWith(engine)) {
                         List testNameParts = it.replace("testResult-", "").split("-") as List
@@ -841,12 +783,11 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
                             try {
                                 makeUnstash(name: "$it", storeOnNAS: options.storeOnNAS)
                             } catch(e) {
-                                println "[ERROR] Failed to unstash ${it}"
+                                println("[ERROR] Failed to unstash ${it}")
                                 lostStashes.add("'${testName}'")
                                 println(e.toString())
                                 println(e.getMessage())
                             }
-
                         }
                     }
                 }
@@ -865,7 +806,7 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
             try {
                 boolean useTrackedMetrics = (env.JOB_NAME.contains("Weekly") || (env.JOB_NAME.contains("Manual") && options.testsPackageOriginal == "Full.json"))
                 boolean saveTrackedMetrics = env.JOB_NAME.contains("Weekly")
-                String metricsRemoteDir = "/volume1/Baselines/TrackedMetrics/RPR-MayaPlugin"
+                String metricsRemoteDir = "/volume1/Baselines/TrackedMetrics/USD-MayaPlugin/${engine}"
 
                 GithubNotificator.updateStatus("Deploy", "Building test report for ${engineName}", "in_progress", options, NotificationConfiguration.BUILDING_REPORT, "${BUILD_URL}")
                 
@@ -1024,17 +965,17 @@ def appendPlatform(String filteredPlatforms, String platform) {
     return filteredPlatforms
 }
 
-def call(String projectRepo = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonProRenderMayaPlugin.git",
+def call(String projectRepo = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonProRenderMayaUSD.git",
         String projectBranch = "",
         String testsBranch = "master",
-        String platforms = 'Windows:NVIDIA_RTX3080TI,AMD_RadeonVII,AMD_RX6800XT;OSX:AMD_RX5700XT',
+        String platforms = 'Windows:NVIDIA_RTX3080TI,AMD_RadeonVII,AMD_RX6800XT',
         String updateRefs = 'No',
         Boolean enableNotifications = true,
         Boolean incrementVersion = true,
         String renderDevice = "gpu",
         String testsPackage = "",
         String tests = "",
-        String toolVersion = "2022",
+        String toolVersion = "2023",
         Boolean forceBuild = false,
         Boolean splitTestsExecution = true,
         String resX = '0',
@@ -1043,12 +984,11 @@ def call(String projectRepo = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonPro
         String iter = '50',
         String theshold = '0.05',
         String customBuildLinkWindows = "",
-        String customBuildLinkOSX = "",
-        String enginesNames = "Northstar",
+        String enginesNames = "Northstar,HybridPro",
         String tester_tag = 'Maya',
         String mergeablePR = "",
         String parallelExecutionTypeString = "TakeAllNodes",
-        Integer testCaseRetries = 5)
+        Integer testCaseRetries = 3)
 {
     ProblemMessageManager problemMessageManager = new ProblemMessageManager(this, currentBuild)
     Map options = [:]
@@ -1070,10 +1010,6 @@ def call(String projectRepo = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonPro
                     throw new Exception()
                 }
             }
-
-            if (env.BRANCH_NAME && env.BRANCH_NAME == "PR-278") {
-                testsBranch = "inemankov/remove_tahoe"
-            }
             
             enginesNames = enginesNames.split(',') as List
             def formattedEngines = []
@@ -1081,7 +1017,7 @@ def call(String projectRepo = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonPro
                 formattedEngines.add(it.replace(' ', '_'))
             }
 
-            Boolean isPreBuilt = customBuildLinkWindows || customBuildLinkOSX
+            Boolean isPreBuilt = customBuildLinkWindows
 
             if (isPreBuilt) {
                 //remove platforms for which pre built plugin is not specified
@@ -1094,11 +1030,6 @@ def call(String projectRepo = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonPro
                     switch(platformName) {
                         case 'Windows':
                             if (customBuildLinkWindows) {
-                                filteredPlatforms = appendPlatform(filteredPlatforms, platform)
-                            }
-                            break
-                        case 'OSX':
-                            if (customBuildLinkOSX) {
                                 filteredPlatforms = appendPlatform(filteredPlatforms, platform)
                             }
                             break
@@ -1138,11 +1069,11 @@ def call(String projectRepo = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonPro
             options << [configuration: PIPELINE_CONFIGURATION,
                         projectRepo:projectRepo,
                         projectBranch:projectBranch,
-                        testRepo:"git@github.com:luxteam/jobs_test_maya.git",
+                        testRepo:"git@github.com:luxteam/jobs_test_usdmaya.git",
                         testsBranch:testsBranch,
                         updateRefs:updateRefs,
                         enableNotifications:enableNotifications,
-                        PRJ_NAME:"RadeonProRenderMayaPlugin",
+                        PRJ_NAME:"RPRMayaUSD",
                         PRJ_ROOT:"rpr-plugins",
                         incrementVersion:incrementVersion,
                         renderDevice:renderDevice,
@@ -1157,10 +1088,12 @@ def call(String projectRepo = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonPro
                         reportName:'Test_20Report',
                         splitTestsExecution:splitTestsExecution,
                         gpusCount:gpusCount,
-                        TEST_TIMEOUT:120,
+                        BUILD_TIMEOUT: 180,
+                        TEST_TIMEOUT:150,
                         ADDITIONAL_XML_TIMEOUT:15,
                         NON_SPLITTED_PACKAGE_TIMEOUT:75,
                         DEPLOY_TIMEOUT:180,
+                        BUILDER_TAG:"MayaUSDBuilder",
                         TESTER_TAG:tester_tag,
                         resX: resX,
                         resY: resY,
@@ -1168,9 +1101,7 @@ def call(String projectRepo = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonPro
                         iter: iter,
                         theshold: theshold,
                         customBuildLinkWindows: customBuildLinkWindows,
-                        customBuildLinkOSX: customBuildLinkOSX,
                         engines: formattedEngines,
-                        enginesNames:enginesNames,
                         nodeRetry: nodeRetry,
                         errorsInSuccession: errorsInSuccession,
                         problemMessageManager: problemMessageManager,

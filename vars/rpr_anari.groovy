@@ -253,7 +253,6 @@ def executeTests(String osName, String asicName, Map options) {
                             if (sessionReport.summary.total != sessionReport.summary.skipped || sessionReport.summary.total == 0){
                                 // remove brocken core package
                                 removeInstaller(osName: osName, options: options, extension: "zip")
-                                collectCrashInfo(osName, options, options.currentTry)
                                 String errorMessage
                                 if (options.currentTry < options.nodeReallocateTries) {
                                     errorMessage = "All tests were marked as error. The test group will be restarted."
@@ -314,7 +313,7 @@ def executeBuildWindows(Map options) {
             """
 
             makeArchiveArtifacts(name: "Anari_Windows.zip", storeOnNAS: options.storeOnNAS)
-            makeStash(includes: "Anari_Windows.zip", name: getProduct.getStashName("Windows"), preZip: false, storeOnNAS: options.storeOnNAS)
+            makeStash(includes: "Anari_Windows.zip", name: getProduct.getStashName("Windows", options), preZip: false, storeOnNAS: options.storeOnNAS)
         }
     }
 
@@ -355,7 +354,7 @@ def executeBuildLinux(String osName, Map options) {
             """
 
             makeArchiveArtifacts(name: "Anari_${osName}.tar", storeOnNAS: options.storeOnNAS)
-            makeStash(includes: "Anari_${osName}.tar", name: getProduct.getStashName(osName), preZip: false, storeOnNAS: options.storeOnNAS)
+            makeStash(includes: "Anari_${osName}.tar", name: getProduct.getStashName(osName, options), preZip: false, storeOnNAS: options.storeOnNAS)
         }
     }
 
@@ -392,7 +391,7 @@ def executeBuildMacOS(Map options, Boolean isx86 = true) {
             """
 
             makeArchiveArtifacts(name: "Anari_${isx86 ? 'MacOS' : 'MacOS_ARM'}.tar", storeOnNAS: options.storeOnNAS)
-            makeStash(includes: "Anari_${isx86 ? 'MacOS' : 'MacOS_ARM'}.tar", name: getProduct.getStashName(isx86 ? "MacOS" : "MacOS_ARM"), preZip: false, storeOnNAS: options.storeOnNAS)
+            makeStash(includes: "Anari_${isx86 ? 'MacOS' : 'MacOS_ARM'}.tar", name: getProduct.getStashName(isx86 ? "MacOS" : "MacOS_ARM", options), preZip: false, storeOnNAS: options.storeOnNAS)
         }
     }
 
@@ -428,7 +427,7 @@ def executeBuild(String osName, Map options) {
             }
         }
 
-        options[getProduct.getIdentificatorKey(osName)] = options.commitSHA
+        options[getProduct.getIdentificatorKey(osName, options)] = options.commitSHA
     } catch (e) {
         throw e
     } finally {
@@ -593,7 +592,6 @@ def executeDeploy(Map options, List platformList, List testResultList) {
             List lostStashes = []
 
             dir("summaryTestResults") {
-                unstashCrashInfo(options['nodeRetry'])
                 testResultList.each() {
                     dir("$it".replace("testResult-", "")) {
                         try {

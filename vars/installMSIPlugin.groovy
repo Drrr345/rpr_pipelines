@@ -87,13 +87,20 @@ def uninstallPlugin(String osName, String tool, Map options){
 }
 
 def installPlugin(String osName, String tool, Map options){
-    String addonName = options[getProduct.getIdentificatorKey(osName)]
+    String addonName = options[getProduct.getIdentificatorKey(osName, options)]
 
     switch(osName) {
         case 'Windows':
             dir("..\\..\\PluginsBinaries") {
                 println "[INFO] MSI name: ${addonName}.msi"
-                installMSI("${addonName}.msi", options.stageName, options.currentTry)
+                options.stageName = options.stageName ?: "${STAGE_NAME}"
+                if (fileExists("${addonName}.msi")) {
+                    bat """
+                        msiexec /i "${addonName}.msi" /quiet /qn /L+ie \"${env.WORKSPACE}\\${options.stageName}_${options.currentTry}.msi.install.log\" /norestart
+                    """
+                } else {
+                    println "Missing msi ${addonName}.msi"
+                }
             }
             break
 

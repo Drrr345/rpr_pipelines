@@ -41,18 +41,25 @@ public class ReportUpdater {
         String reportFiles = "summary_report.html"
         String reportFilesNames = "Overview Report"
 
-        if (options.engines) {
-            options.engines.each { engine ->
-                String engineName = options.enginesNames[options.engines.indexOf(engine)]
-                String reportName = "Test Report ${engineName}"
+        if (options.testProfiles) {
+            options.testProfiles.each { profile ->
+                String profileName
 
-                if (options.engines.size() > 1) {
+                if (options.containsKey("displayingTestProfiles")) {
+                    profileName = options.displayingTestProfiles[profile]
+                } else {
+                    profileName = profile
+                }
+
+                String reportName = "Test Report ${profileName}"
+
+                if (options.testProfiles.size() > 1) {
                     // publish, but do not create links to reports (they'll be accessible through overview report)
                     context.utils.publishReport(context, "${context.BUILD_URL}", "summaryTestResults", "summary_report.html, performance_report.html, compare_report.html", \
                         reportName, "Summary Report, Performance Report, Compare Report" , options.storeOnNAS, \
                         ["jenkinsBuildUrl": context.BUILD_URL, "jenkinsBuildName": context.currentBuild.displayName, "updatable": true])
                 } else {
-                    // pass links for builds with only one engine
+                    // pass links for builds with only one profile
                     context.utils.publishReport(context, "${context.BUILD_URL}", "summaryTestResults", "summary_report.html, performance_report.html, compare_report.html", \
                         reportName, "Summary Report, Performance Report, Compare Report" , options.storeOnNAS, \
                         ["jenkinsBuildUrl": context.BUILD_URL, "jenkinsBuildName": context.currentBuild.displayName])
@@ -61,29 +68,29 @@ public class ReportUpdater {
                 String rebuiltScript = context.readFile("..\\..\\cis_tools\\update_report_template.sh")
 
                 rebuiltScript = rebuiltScript.replace("<jobs_started_time>", options.JOB_STARTED_TIME).replace("<build_name>", options.baseBuildName) \
-                    .replace("<report_name>", reportName.replace(" ", "_")).replace("<build_script_args>", buildArgsFunc(engineName, options)) \
+                    .replace("<report_name>", reportName.replace(" ", "_")).replace("<build_script_args>", buildArgsFunc(profileName, options)) \
                     .replace("<build_id>", env.BUILD_ID).replace("<job_name>", env.JOB_NAME).replace("<jenkins_url>", env.JENKINS_URL)
 
                 // replace DOS EOF by Unix EOF
                 rebuiltScript = rebuiltScript.replaceAll("\r\n", "\n")
 
-                context.writeFile(file: "update_report_${engine}.sh", text: rebuiltScript)
+                context.writeFile(file: "update_report_${profile}.sh", text: rebuiltScript)
 
-                context.uploadFiles("update_report_${engine}.sh", "${remotePath}/jobs_test_repo/jobs_launcher")
+                context.uploadFiles("update_report_${profile}.sh", "${remotePath}/jobs_test_repo/jobs_launcher")
 
-                locks[engine] = new AtomicBoolean(false)
+                locks[profile] = new AtomicBoolean(false)
 
-                updateReport(engine, false)
+                updateReport(profile, false)
 
                 String publishedReportName = reportName.replace(" ", "_")
                 locations = locations ? "${locations}::${publishedReportName}" : "${publishedReportName}"
 
                 reportFiles += ",../${reportName.replace(' ', '_')}/summary_report.html"
-                reportFilesNames += ",${engineName} Report"
+                reportFilesNames += ",${profileName} Report"
             }
 
-            // do not build an overview report for builds with only one engine
-            if (options.engines.size() > 1) {
+            // do not build an overview report for builds with only one profile
+            if (options.testProfiles.size() > 1) {
                 context.println("[INFO] Publish overview report")
 
                 // add overview report
@@ -141,16 +148,16 @@ public class ReportUpdater {
     /**
      * Function to update report
      * 
-     * @param engine (optional) engine of the target report (if project supports splitting by engines)
-     * @param updateOverviewReport (optional) specify should overview report be updated or not (default - true). For builds with only one engine this param is ignored
+     * @param profile (optional) profile of the target report (if project supports splitting by profiles)
+     * @param updateOverviewReport (optional) specify should overview report be updated or not (default - true). For builds with only one profile this param is ignored
      */
-    def updateReport(String engine = "", Boolean updateOverviewReport = true) {
-        String lockKey = engine ?: "default"
+    def updateReport(String profile = "", Boolean updateOverviewReport = true) {
+        String lockKey = profile ?: "default"
         String remotePath = "/volume1/web/${env.JOB_NAME}/${env.BUILD_NUMBER}/jobs_test_repo/jobs_launcher".replace(" ", "_")
 
         try {
             if (locks[lockKey].compareAndSet(false, true)) {
-                String scriptName = engine ? "update_report_${engine}.sh" : "update_report.sh"
+                String scriptName = profile ? "update_report_${profile}.sh" : "update_report.sh"
 
                 context.withCredentials([context.string(credentialsId: "nasURL", variable: "REMOTE_HOST"), context.string(credentialsId: "nasSSHPort", variable: "SSH_PORT")]) {
                     if (context.isUnix()) {
@@ -172,7 +179,7 @@ public class ReportUpdater {
             locks[lockKey].getAndSet(false)
         }
 
-        if (engine && options.engines.size() > 1 && updateOverviewReport) {
+        if (profile && options.testProfiles.size() > 1 && updateOverviewReport) {
             // update overview report
             updateReport()
         }

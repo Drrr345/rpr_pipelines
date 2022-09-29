@@ -1,5 +1,6 @@
+import universe.*
 import groovy.transform.Field
-import groovy.json.JsonOutput;
+import groovy.json.JsonOutput
 import net.sf.json.JSON
 import net.sf.json.JSONSerializer
 import net.sf.json.JsonConfig
@@ -7,13 +8,65 @@ import TestsExecutionType
 import java.util.concurrent.atomic.AtomicInteger
 
 
-@Field final String PRODUCT_NAME = "AMD%20Radeon™%20ProRender%20for%203ds%20Max"
+@Field final String PRODUCT_NAME = "AMD%20Radeon™%20ProRender%20Viewer"
 
-@Field final PipelineConfiguration PIPELINE_CONFIGURATION = new PipelineConfiguration(
-    supportedOS: ["Windows"],
-    productExtensions: ["Windows": "msi"],
-    artifactNameBase: "RadeonProRender"
-)
+
+def getViewerTool(String osName, Map options)
+{
+    switch(osName) {
+        case 'Windows':
+
+            if (!fileExists("${CIS_TOOLS}\\..\\PluginsBinaries\\${options.pluginWinSha}.zip")) {
+
+                clearBinariesWin()
+
+                println "[INFO] The plugin does not exist in the storage. Unstashing and copying..."
+                makeUnstash(name: "appWindows", unzip: false)
+                
+                bat """
+                    IF NOT EXIST "${CIS_TOOLS}\\..\\PluginsBinaries" mkdir "${CIS_TOOLS}\\..\\PluginsBinaries"
+                    copy RprViewer_Windows.zip "${CIS_TOOLS}\\..\\PluginsBinaries\\${options.pluginWinSha}.zip"
+                """
+
+            } else {
+                println "[INFO] The plugin ${options.pluginWinSha}.zip exists in the storage."
+                bat """
+                    copy "${CIS_TOOLS}\\..\\PluginsBinaries\\${options.pluginWinSha}.zip" RprViewer_Windows.zip
+                """
+            }
+
+            unzip zipFile: "RprViewer_Windows.zip", dir: "RprViewer", quiet: true
+            break
+
+        case 'OSX':
+            println "OSX isn't supported"
+            break
+
+        default:
+            
+            if (!fileExists("${CIS_TOOLS}/../PluginsBinaries/${options.pluginUbuntuSha}.zip")) {
+
+                clearBinariesUnix()
+
+                println "[INFO] The plugin does not exist in the storage. Unstashing and copying..."
+                makeUnstash(name: "appUbuntu20", unzip: false)
+                
+                sh """
+                    mkdir -p "${CIS_TOOLS}/../PluginsBinaries"
+                    cp RprViewer_Ubuntu20.zip "${CIS_TOOLS}/../PluginsBinaries/${options.pluginUbuntuSha}.zip"
+                """ 
+
+            } else {
+
+                println "[INFO] The plugin ${options.pluginUbuntuSha}.zip exists in the storage."
+                sh """
+                    cp "${CIS_TOOLS}/../PluginsBinaries/${options.pluginUbuntuSha}.zip" RprViewer_Ubuntu20.zip
+                """
+            }
+
+            unzip zipFile: "RprViewer_Ubuntu20.zip", dir: "RprViewer", quiet: true
+    }
+}
 
 
 def executeGenTestRefCommand(String osName, Map options, Boolean delete)
@@ -25,12 +78,18 @@ def executeGenTestRefCommand(String osName, Map options, Boolean delete)
                     make_results_baseline.bat ${delete}
                 """
                 break
+            case 'OSX':
+                sh """
+                    ./make_results_baseline.sh ${delete}
+                """
+                break
             default:
-                println "[WARNING] ${osName} is not supported"
+                sh """
+                    ./make_results_baseline.sh ${delete}
+                """
         }
     }
 }
-
 
 def executeTestCommand(String osName, String asicName, Map options)
 {
@@ -50,47 +109,65 @@ def executeTestCommand(String osName, String asicName, Map options)
     println "Set timeout to ${testTimeout}"
 
     timeout(time: testTimeout, unit: 'MINUTES') { 
-        dir('scripts') {
-            bat"""
-                run.bat ${options.renderDevice} \"${testsPackageName}\" \"${testsNames}\" ${options.toolVersion} ${options.resX} ${options.resY} ${options.SPU} ${options.iter} ${options.theshold} ${options.updateRefs} >> \"../${options.stageName}_${options.currentTry}.log\"  2>&1
-            """
+        UniverseManager.executeTests(osName, asicName, options) {
+            switch(osName) {
+                case 'Windows':
+                    String driverPostfix = asicName.endsWith('_Beta') ? " Beta Driver" : ""
+
+                    dir('scripts') {
+                        bat """
+                            set CIS_RENDER_DEVICE=%CIS_RENDER_DEVICE%${driverPostfix}
+                            run.bat \"${testsPackageName}\" \"${testsNames}\" ${options.testCaseRetries} ${options.updateRefs} 1>> \"../${options.stageName}_${options.currentTry}.log\"  2>&1
+                        """
+                    }
+                    break
+
+                case 'OSX':
+                    println("OSX is not supported")
+                    break;
+
+                default:
+                    dir('scripts') {
+                        withEnv(["LD_LIBRARY_PATH=../RprViewer/engines/hybrid:\$LD_LIBRARY_PATH"]) {
+                            sh """
+                                chmod +x ../RprViewer/RadeonProViewer
+                                chmod +x run.sh
+                                ./run.sh \"${testsPackageName}\" \"${testsNames}\" ${options.testCaseRetries} ${options.updateRefs} 1>> \"../${options.stageName}_${options.currentTry}.log\"  2>&1
+                            """
+                        }
+                    }
+            }
         }
     }
 }
-
 
 def executeTests(String osName, String asicName, Map options)
 {
     // used for mark stash results or not. It needed for not stashing failed tasks which will be retried.
     Boolean stashResults = true
-    
+
     try {
         withNotifications(title: options["stageName"], options: options, logUrl: "${BUILD_URL}", configuration: NotificationConfiguration.DOWNLOAD_TESTS_REPO) {
-            timeout(time: "5", unit: "MINUTES") {
+            timeout(time: "10", unit: "MINUTES") {
                 cleanWS(osName)
-                checkoutScm(branchName: options.testsBranch, repositoryUrl: options.testRepo)
+                checkoutScm(branchName: options.testsBranch, repositoryUrl: "git@github.com:luxteam/jobs_test_rprviewer.git")
+                
             }
+        }
+
+        withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.DOWNLOAD_PACKAGE) {
+            getViewerTool(osName, options)
         }
 
         withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.DOWNLOAD_SCENES) {
-            String assets_dir = isUnix() ? "${CIS_TOOLS}/../TestResources/rpr_max_autotests_assets" : "/mnt/c/TestResources/rpr_max_autotests_assets"
-            downloadFiles("/volume1/web/Assets/rpr_max_autotests/", assets_dir)
+            String assets_dir = isUnix() ? "${CIS_TOOLS}/../TestResources/rpr_viewer_autotests_assets" : "/mnt/c/TestResources/rpr_viewer_autotests_assets"
+            downloadFiles("/volume1/Assets/rpr_viewer_autotests/", assets_dir)
         }
 
-        withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.INSTALL_PLUGIN) {
-            Boolean newPluginInstalled = false
-            timeout(time: "15", unit: "MINUTES") {
-                getProduct(osName, options)
-                newPluginInstalled = installMSIPlugin(osName, "Max", options)
-                println "[INFO] Install function return ${newPluginInstalled}"
-            }
-        }
-
-        String REF_PATH_PROFILE="/volume1/Baselines/rpr_max_autotests/${asicName}-${osName}"
-
+        String REF_PATH_PROFILE="/volume1/Baselines/rpr_viewer_autotests/${asicName}-${osName}"
         options.REF_PATH_PROFILE = REF_PATH_PROFILE
 
-        outputEnvironmentInfo(osName, options.stageName, options.currentTry)
+        outputEnvironmentInfo(osName, "", options.currentTry)
 
         if (options["updateRefs"].contains("Update")) {
             withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.EXECUTE_TESTS) {
@@ -108,8 +185,8 @@ def executeTests(String osName, String asicName, Map options)
             }
         } else {
             withNotifications(title: options["stageName"], printMessage: true, options: options, configuration: NotificationConfiguration.COPY_BASELINES) {
-                String baseline_dir = isUnix() ? "${CIS_TOOLS}/../TestResources/rpr_max_autotests_baselines" : "/mnt/c/TestResources/rpr_max_autotests_baselines"
-                println "[INFO] Downloading reference images for ${options.tests}"
+                String baseline_dir = isUnix() ? "${CIS_TOOLS}/../TestResources/rpr_viewer_autotests_baselines" : "/mnt/c/TestResources/rpr_viewer_autotests_baselines"
+                println("[INFO] Downloading reference images for ${options.tests}")
                 options.tests.split(" ").each() {
                     if (it.contains(".json")) {
                         downloadFiles("${REF_PATH_PROFILE}/", baseline_dir)
@@ -166,11 +243,12 @@ def executeTests(String osName, String asicName, Map options)
             }
             archiveArtifacts artifacts: "${options.stageName}/*.log", allowEmptyArchive: true
             if (stashResults) {
-                dir('Work') {
-                    if (fileExists("Results/Max/session_report.json")) {
-                        
+                dir('Work')
+                {
+                    if (fileExists("Results/RprViewer/session_report.json")) {
+
                         def sessionReport = null
-                        sessionReport = readJSON file: 'Results/Max/session_report.json'
+                        sessionReport = readJSON file: 'Results/RprViewer/session_report.json'
 
                         if (sessionReport.summary.error > 0) {
                             GithubNotificator.updateStatus("Test", options['stageName'], "action_required", options, NotificationConfiguration.SOME_TESTS_ERRORED, "${BUILD_URL}")
@@ -181,17 +259,14 @@ def executeTests(String osName, String asicName, Map options)
                         }
 
                         println("Stashing test results to : ${options.testResultsName}")
+                        makeStash(includes: '**/*', name: "${options.testResultsName}", allowEmpty: true)
 
-                        utils.stashTestData(this, options, options.storeOnNAS)
-                        // deinstalling broken addon
+                        // reallocate node if there are still attempts
                         // if test group is fully errored or number of test cases is equal to zero
                         if (sessionReport.summary.total == sessionReport.summary.error + sessionReport.summary.skipped || sessionReport.summary.total == 0) {
                             // check that group isn't fully skipped
                             if (sessionReport.summary.total != sessionReport.summary.skipped || sessionReport.summary.total == 0){
-                                // remove installer of broken addon
-                                removeInstaller(osName: osName, options: options)
-                                collectCrashInfo(osName, options, options.currentTry)
-                                installMSIPlugin(osName, "Max", options, false, true)
+                                removeInstaller(osName: osName, options: options, extension: "zip")
                                 String errorMessage
                                 if (options.currentTry < options.nodeReallocateTries) {
                                     errorMessage = "All tests were marked as error. The test group will be restarted."
@@ -201,14 +276,8 @@ def executeTests(String osName, String asicName, Map options)
                                 throw new ExpectedExceptionWrapper(errorMessage, new Exception(errorMessage))
                             }
                         }
-
-                        if (options.reportUpdater) {
-                            options.reportUpdater.updateReport(options.engine)
-                        }
                     }
                 }
-            } else {
-                println "[INFO] Task ${options.tests} will be retried."
             }
         } catch (e) {
             // throw exception in finally block only if test stage was finished
@@ -227,51 +296,90 @@ def executeTests(String osName, String asicName, Map options)
 
 def executeBuildWindows(Map options)
 {
-    dir("RadeonProRenderMaxPlugin/Package") {
-        GithubNotificator.updateStatus("Build", "Windows", "in_progress", options, NotificationConfiguration.BUILD_SOURCE_CODE_START_MESSAGE, "${BUILD_URL}/artifact/Build-Windows.log")
+    withNotifications(title: "Windows", options: options, logUrl: "${BUILD_URL}/artifact/Build-Windows.log", configuration: NotificationConfiguration.BUILD_SOURCE_CODE) {
         bat """
-            build_windows_installer.cmd >> ../../${STAGE_NAME}.log  2>&1
+            cmake . -B build -G "Visual Studio 15 2017" -A x64 >> ${STAGE_NAME}.log 2>&1
+            cmake --build build --target RadeonProViewer --config Release >> ${STAGE_NAME}.log 2>&1
+        """
+    }
+
+    withNotifications(title: "Windows", options: options, artifactUrl: "${BUILD_URL}/artifact/RprViewer_Windows.zip", configuration: NotificationConfiguration.BUILD_PACKAGE) {
+        bat """
+            mkdir ${options.DEPLOY_FOLDER}
+            xcopy config.json ${options.DEPLOY_FOLDER}
+            xcopy README.md ${options.DEPLOY_FOLDER}
+            xcopy UIConfig.json ${options.DEPLOY_FOLDER}
+            xcopy sky.hdr ${options.DEPLOY_FOLDER}
+            xcopy build\\Viewer\\Release\\RadeonProViewer.exe ${options.DEPLOY_FOLDER}\\RadeonProViewer.exe*
+
+            xcopy shaders ${options.DEPLOY_FOLDER}\\shaders /y/i/s
+
+            mkdir ${options.DEPLOY_FOLDER}\\rml\\lib
+            xcopy rml\\lib\\RadeonML-DirectML.dll ${options.DEPLOY_FOLDER}\\rml\\lib\\RadeonML-DirectML.dll*
+            xcopy rif\\models ${options.DEPLOY_FOLDER}\\rif\\models /s/i/y
+            xcopy rif\\lib ${options.DEPLOY_FOLDER}\\rif\\lib /s/i/y
+            del /q ${options.DEPLOY_FOLDER}\\rif\\lib\\*.lib
         """
 
-        if (options.branch_postfix) {
-            bat """
-                rename RadeonProRender*msi *.(${options.branch_postfix}).msi
-            """
+        //temp fix
+        bat """
+            xcopy build\\viewer\\engines ${options.DEPLOY_FOLDER}\\engines /s/i/y
+        """
+
+        def controlFiles = ["config.json", "UIConfig.json", "sky.hdr", "RadeonProViewer.exe", "rml/lib/RadeonML-DirectML.dll"]
+            controlFiles.each() {
+            if (!fileExists("${options.DEPLOY_FOLDER}/${it}")) {
+                error "Not found ${it}"
+            }
         }
 
-        String ARTIFACT_NAME = options.branch_postfix ? "RadeonProRender3dsMax_${options.pluginVersion}.(${options.branch_postfix}).msi" : "RadeonProRender3dsMax_${options.pluginVersion}.msi"
-        String artifactURL = makeArchiveArtifacts(name: ARTIFACT_NAME, storeOnNAS: options.storeOnNAS)
-
-        bat """
-            rename  RadeonProRender*.msi RadeonProRenderMax.msi
-        """
-
-        bat """
-            echo import msilib >> getMsiProductCode.py
-            echo db = msilib.OpenDatabase(r'RadeonProRenderMax.msi', msilib.MSIDBOPEN_READONLY) >> getMsiProductCode.py
-            echo view = db.OpenView("SELECT Value FROM Property WHERE Property='ProductCode'") >> getMsiProductCode.py
-            echo view.Execute(None) >> getMsiProductCode.py
-            echo print(view.Fetch().GetString(1)) >> getMsiProductCode.py
-        """
-
-        options[getProduct.getIdentificatorKey("Windows")] = python3("getMsiProductCode.py").split('\r\n')[2].trim()[1..-2]
-        println "[INFO] Built MSI product code: ${options.productCode}"
-        makeStash(includes: 'RadeonProRenderMax.msi', name: getProduct.getStashName("Windows"), preZip: false, storeOnNAS: options.storeOnNAS)
-
-        GithubNotificator.updateStatus("Build", "Windows", "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
+        zip archive: true, dir: "${options.DEPLOY_FOLDER}", glob: '', zipFile: "RprViewer_Windows.zip"
+        makeStash(includes: "RprViewer_Windows.zip", name: "appWindows", preZip: false)
+        options.pluginWinSha = sha1 "RprViewer_Windows.zip"
     }
 }
 
 
+def executeBuildLinux(Map options)
+{
+    withNotifications(title: "Ubuntu20", options: options, logUrl: "${BUILD_URL}/artifact/Build-Ubuntu20.log", configuration: NotificationConfiguration.BUILD_SOURCE_CODE) {
+        sh """
+            mkdir build
+            cd build
+            cmake .. >> ../${STAGE_NAME}.log 2>&1
+            make -j 8 >> ../${STAGE_NAME}.log 2>&1
+        """
+    }
+
+    withNotifications(title: "Ubuntu20", options: options, artifactUrl: "${BUILD_URL}/artifact/RprViewer_Ubuntu20.zip", configuration: NotificationConfiguration.BUILD_PACKAGE) {
+        sh """
+            mkdir ${options.DEPLOY_FOLDER}
+            cp config.json ${options.DEPLOY_FOLDER}
+            cp README.md ${options.DEPLOY_FOLDER}
+            cp UIConfig.json ${options.DEPLOY_FOLDER}
+            cp sky.hdr ${options.DEPLOY_FOLDER}
+            cp build/viewer/RadeonProViewer ${options.DEPLOY_FOLDER}/RadeonProViewer
+
+            cp -rf shaders ${options.DEPLOY_FOLDER}/shaders
+
+            mkdir ${options.DEPLOY_FOLDER}/rif
+            cp -rf rif/models ${options.DEPLOY_FOLDER}/rif/models
+            cp -rf rif/lib ${options.DEPLOY_FOLDER}/rif/lib
+
+            cp -rf build/viewer/engines ${options.DEPLOY_FOLDER}/engines
+        """
+
+        zip archive: true, dir: "${options.DEPLOY_FOLDER}", glob: '', zipFile: "RprViewer_Ubuntu20.zip"
+        makeStash(includes: "RprViewer_Ubuntu20.zip", name: "appUbuntu20", preZip: false)
+        options.pluginUbuntuSha = sha1 "RprViewer_Ubuntu20.zip"
+    }
+}
+
 def executeBuild(String osName, Map options)
 {
-    cleanWS(osName)
-
     try {
-        dir("RadeonProRenderMaxPlugin") {
-            withNotifications(title: osName, options: options, configuration: NotificationConfiguration.DOWNLOAD_SOURCE_CODE_REPO) {
-                checkoutScm(branchName: options.projectBranch, repositoryUrl: options.projectRepo, prBranchName: options.prBranchName, prRepoName: options.prRepoName)
-            }
+        withNotifications(title: osName, options: options, configuration: NotificationConfiguration.DOWNLOAD_SOURCE_CODE_REPO) {
+            checkoutScm(branchName: options.projectBranch, repositoryUrl: options.projectRepo)
         }
 
         outputEnvironmentInfo(osName)
@@ -281,11 +389,13 @@ def executeBuild(String osName, Map options)
                 case 'Windows':
                     executeBuildWindows(options)
                     break
+                case 'OSX':
+                    println("OSX isn't supported.")
+                    break
                 default:
-                    println("[WARNING] ${osName} is not supported")
+                    executeBuildLinux(options)
             }
         }
-        //stash includes: 'Bin/**/*', name: "app${osName}"
     } catch (e) {
         throw e
     } finally {
@@ -293,130 +403,52 @@ def executeBuild(String osName, Map options)
     }
 }
 
-def getReportBuildArgs(Map options) {
-    if (options["isPreBuilt"]) {
-        return """${utils.escapeCharsByUnicode("3ds Max")} "PreBuilt" "PreBuilt" "PreBuilt" """
-    } else {
-        return """${utils.escapeCharsByUnicode("3ds Max")} ${options.commitSHA} ${options.projectBranchName} \"${utils.escapeCharsByUnicode(options.commitMessage)}\""""
-    }
-}
-
 def executePreBuild(Map options)
 {
-    // manual job with prebuilt plugin
-    if (options.isPreBuilt) {
-        println "[INFO] Build was detected as prebuilt. Build stage will be skipped"
-        currentBuild.description = "<b>Project branch:</b> Prebuilt plugin<br/>"
-        options.executeBuild = false
-        options.executeTests = true
-    // manual job
-    } else if (options.forceBuild) {
-        println "[INFO] Manual job launch detected"
-        options['executeBuild'] = true
-        options['executeTests'] = true
-    // auto job
+    if (env.CHANGE_URL) {
+        println("[INFO] Branch was detected as Pull Request")
+        options.testsPackage = "PR.json"
+    } else if (env.BRANCH_NAME && env.BRANCH_NAME == "master") {
+        options.testsPackage = "master.json"
+    } else if (env.BRANCH_NAME) {
+        options.testsPackage = "smoke.json"
+    }
+
+    withNotifications(title: "Jenkins build configuration", options: options, configuration: NotificationConfiguration.DOWNLOAD_SOURCE_CODE_REPO) {
+        checkoutScm(branchName: options.projectBranch, repositoryUrl: options.projectRepo, disableSubmodules: true)
+    }
+
+    options.commitAuthor = bat (script: "git show -s --format=%%an HEAD ",returnStdout: true).split('\r\n')[2].trim()
+    options.commitMessage = bat (script: "git log --format=%%B -n 1", returnStdout: true).split('\r\n')[2].trim()
+    options.commitSHA = bat (script: "git log --format=%%H -1 ", returnStdout: true).split('\r\n')[2].trim()
+
+    println "The last commit was written by ${options.commitAuthor}."
+    println "Commit message: ${options.commitMessage}"
+    println "Commit SHA: ${options.commitSHA}"
+
+    if (options.projectBranch){
+        currentBuild.description = "<b>Project branch:</b> ${options.projectBranch}<br/>"
     } else {
-        if (env.CHANGE_URL) {
-            println "[INFO] Branch was detected as Pull Request"
-            options['executeBuild'] = true
-            options['executeTests'] = true
-            options['testsPackage'] = "regression.json"
-        } else if (env.BRANCH_NAME == "master" || env.BRANCH_NAME == "develop") {
-           println "[INFO] ${env.BRANCH_NAME} branch was detected"
-           options['executeBuild'] = true
-           options['executeTests'] = true
-           options['testsPackage'] = "regression.json"
-        } else {
-            println "[INFO] ${env.BRANCH_NAME} branch was detected"
-            options['testsPackage'] = "regression.json"
+        currentBuild.description = "<b>Project branch:</b> ${env.BRANCH_NAME}<br/>"
+    }
+
+    currentBuild.description += "<b>Commit author:</b> ${options.commitAuthor}<br/>"
+    currentBuild.description += "<b>Commit message:</b> ${options.commitMessage}<br/>"
+    currentBuild.description += "<b>Commit SHA:</b> ${options.commitSHA}<br/>"
+
+    if (options['incrementVersion']) {
+        withNotifications(title: "Jenkins build configuration", printMessage: true, options: options, configuration: NotificationConfiguration.CREATE_GITHUB_NOTIFICATOR) {
+            GithubNotificator githubNotificator = new GithubNotificator(this, options)
+            githubNotificator.init(options)
+            options["githubNotificator"] = githubNotificator
+            githubNotificator.initPreBuild("${BUILD_URL}")
         }
-    }
-
-    // branch postfix
-    options["branch_postfix"] = ""
-    if (env.BRANCH_NAME && env.BRANCH_NAME == "master") {
-        options["branch_postfix"] = "release"
-    } else if (env.BRANCH_NAME && env.BRANCH_NAME != "master" && env.BRANCH_NAME != "develop") {
-        options["branch_postfix"] = env.BRANCH_NAME.replace('/', '-')
-    } else if (options.projectBranch && options.projectBranch != "master" && options.projectBranch != "develop") {
-        options["branch_postfix"] = options.projectBranch.replace('/', '-')
-    }
-
-    if (!options['isPreBuilt']) {
-        dir('RadeonProRenderMaxPlugin') {
-            withNotifications(title: "Jenkins build configuration", options: options, configuration: NotificationConfiguration.DOWNLOAD_SOURCE_CODE_REPO) {
-                checkoutScm(branchName: options.projectBranch, repositoryUrl: options.projectRepo, prBranchName: options.prBranchName, prRepoName: options.prRepoName, disableSubmodules: true)
-            }
-
-            options.commitAuthor = bat (script: "git show -s --format=%%an HEAD ",returnStdout: true).split('\r\n')[2].trim()
-            options.commitMessage = bat (script: "git log --format=%%B -n 1", returnStdout: true).split('\r\n')[2].trim()
-            options.commitSHA = bat (script: "git log --format=%%H -1 ", returnStdout: true).split('\r\n')[2].trim()
-            options.commitShortSHA = options.commitSHA[0..6]
-            options.branchName = env.BRANCH_NAME ?: options.projectBranch
-
-            println "The last commit was written by ${options.commitAuthor}."
-            println "Commit message: ${options.commitMessage}"
-            println "Commit SHA: ${options.commitSHA}"
-            println "Commit shortSHA: ${options.commitShortSHA}"
-            println "Branch name: ${options.branchName}"
-
-            withNotifications(title: "Jenkins build configuration", options: options, configuration: NotificationConfiguration.INCREMENT_VERSION) {
-                options.pluginVersion = version_read("${env.WORKSPACE}\\RadeonProRenderMaxPlugin\\version.h", '#define VERSION_STR')
-
-                if (options['incrementVersion']) {
-                    withNotifications(title: "Jenkins build configuration", printMessage: true, options: options, configuration: NotificationConfiguration.CREATE_GITHUB_NOTIFICATOR) {
-                        GithubNotificator githubNotificator = new GithubNotificator(this, options)
-                        githubNotificator.init(options)
-                        options["githubNotificator"] = githubNotificator
-                        githubNotificator.initPreBuild("${BUILD_URL}")
-                        options.projectBranchName = githubNotificator.branchName
-                    }
-                    
-                    if(env.BRANCH_NAME == "develop" && options.commitAuthor != "radeonprorender") {
-
-                        println "[INFO] Incrementing version of change made by ${options.commitAuthor}."
-                        println "[INFO] Current build version: ${options.pluginVersion}"
-
-                        def new_version = version_inc(options.pluginVersion, 3)
-                        println "[INFO] New build version: ${new_version}"
-                        version_write("${env.WORKSPACE}\\RadeonProRenderMaxPlugin\\version.h", '#define VERSION_STR', new_version)
-
-                        options.pluginVersion = version_read("${env.WORKSPACE}\\RadeonProRenderMaxPlugin\\version.h", '#define VERSION_STR')
-                        println "[INFO] Updated build version: ${options.pluginVersion}"
-
-                        bat """
-                          git add version.h
-                          git commit -m "buildmaster: version update to ${options.pluginVersion}"
-                          git push origin HEAD:develop
-                        """
-
-                        //get commit's sha which have to be build
-                        options.commitSHA = bat (script: "git log --format=%%H -1 ", returnStdout: true).split('\r\n')[2].trim()
-                        options.projectBranch = options.commitSHA
-                        println "[INFO] Project branch hash: ${options.projectBranch}"
-                    } else {
-                        if (options.commitMessage.contains("CIS:BUILD")) {
-                            options['executeBuild'] = true
-                        }
-
-                        if (options.commitMessage.contains("CIS:TESTS")) {
-                            options['executeBuild'] = true
-                            options['executeTests'] = true
-                        }
-                        // get a list of tests from commit message for auto builds
-                        options.tests = utils.getTestsFromCommitMessage(options.commitMessage)
-                        println "[INFO] Test groups mentioned in commit message: ${options.tests}"
-                    }
-                } else {
-                    options.projectBranchName = options.projectBranch
-                }
-
-                currentBuild.description = "<b>Project branch:</b> ${options.projectBranchName}<br/>"
-                currentBuild.description += "<b>Version:</b> ${options.pluginVersion}<br/>"
-                currentBuild.description += "<b>Commit author:</b> ${options.commitAuthor}<br/>"
-                currentBuild.description += "<b>Commit message:</b> ${options.commitMessage}<br/>"
-                currentBuild.description += "<b>Commit SHA:</b> ${options.commitSHA}<br/>"
-            }
+        
+        String testsFromCommit = utils.getTestsFromCommitMessage(options.commitMessage)
+        if(env.BRANCH_NAME != "develop" && testsFromCommit) {
+            // get a list of tests from commit message for auto builds
+            options.tests = testsFromCommit
+            println "[INFO] Test groups mentioned in commit message: ${options.tests}"
         }
     }
 
@@ -424,8 +456,8 @@ def executePreBuild(Map options)
     options.timeouts = [:]
 
     withNotifications(title: "Jenkins build configuration", options: options, configuration: NotificationConfiguration.CONFIGURE_TESTS) {
-        dir('jobs_test_max') {
-            checkoutScm(branchName: options.testsBranch, repositoryUrl: options.testRepo)
+        dir('jobs_test_rprviewer') {
+            checkoutScm(branchName: options.testsBranch, repositoryUrl: 'git@github.com:luxteam/jobs_test_rprviewer.git')
             dir ('jobs_launcher') {
                 options['jobsLauncherBranch'] = bat (script: "git log --format=%%H -1 ", returnStdout: true).split('\r\n')[2].trim()
             }
@@ -434,7 +466,7 @@ def executePreBuild(Map options)
 
             def packageInfo
 
-            if (options.testsPackage != "none")  {
+            if (options.testsPackage != "none") {
                 packageInfo = readJSON file: "jobs/${options.testsPackage}"
                 options.isPackageSplitted = packageInfo["split"]
                 // if it's build of manual job and package can be splitted - use list of tests which was specified in params (user can change list of tests before run build)
@@ -443,7 +475,7 @@ def executePreBuild(Map options)
                 }
             }
 
-            if (options.testsPackage != "none") {
+            if(options.testsPackage != "none") {
                 if (options.isPackageSplitted) {
                     println("[INFO] Tests package '${options.testsPackage}' can be splitted")
                 } else {
@@ -481,8 +513,6 @@ def executePreBuild(Map options)
                     tests << modifiedPackageName
                     options.timeouts[options.testsPackage] = options.NON_SPLITTED_PACKAGE_TIMEOUT + options.ADDITIONAL_XML_TIMEOUT
                 }
-
-                options.tests = tests
             } else {
                 options.tests = utils.uniteSuites(this, "jobs/weights.json", options.tests.split(" ") as List)
                 options.tests.each() {
@@ -490,20 +520,55 @@ def executePreBuild(Map options)
                     options.timeouts["${it}"] = (xml_timeout > 0) ? xml_timeout : options.TEST_TIMEOUT
                 }
             }
+            options.tests = tests
+
+            options.skippedTests = [:]
+            if (options.updateRefs == "No") {
+                options.platforms.split(';').each() {
+                    if (it) {
+                        List tokens = it.tokenize(':')
+                        String osName = tokens.get(0)
+                        String gpuNames = ""
+                        if (tokens.size() > 1) {
+                            gpuNames = tokens.get(1)
+                        }
+
+                        if (gpuNames) {
+                            gpuNames.split(',').each() {
+                                for (test in options.tests) {
+                                    try {
+                                        dir ("jobs_launcher") {
+                                            String output = bat(script: "is_group_skipped.bat ${it} ${osName} \"\" \"..\\jobs\\Tests\\${test}\\test_cases.json\"", returnStdout: true).trim()
+                                            if (output.contains("True")) {
+                                                if (!options.skippedTests.containsKey(test)) {
+                                                    options.skippedTests[test] = []
+                                                }
+                                                options.skippedTests[test].add("${it}-${osName}")
+                                            }
+                                        }
+                                    } catch(Exception e) {
+                                        println(e.toString())
+                                        println(e.getMessage())
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                println "Skipped test groups:"
+                println options.skippedTests.inspect()
+            } else {
+                println "Ignore searching of tested groups due to updating of baselines"
+            }
         }
-    }
 
-    if (env.BRANCH_NAME && options.githubNotificator) {
-        options.githubNotificator.initChecks(options, "${BUILD_URL}")
-    }
+        if (env.BRANCH_NAME && options.githubNotificator) {
+            options.githubNotificator.initChecks(options, "${BUILD_URL}")
+        }
 
-    println "timeouts: ${options.timeouts}"
+        options.testsList = options.tests
 
-    options.testsList = options.tests
-
-    if (options.flexibleUpdates && multiplatform_pipeline.shouldExecuteDelpoyStage(options)) {
-        options.reportUpdater = new ReportUpdater(this, env, options)
-        options.reportUpdater.init(this.&getReportBuildArgs)
+        println "timeouts: ${options.timeouts}"
     }
 }
 
@@ -512,19 +577,18 @@ def executeDeploy(Map options, List platformList, List testResultList)
     try {
         if (options['executeTests'] && testResultList) {
             withNotifications(title: "Building test report", options: options, startUrl: "${BUILD_URL}", configuration: NotificationConfiguration.DOWNLOAD_TESTS_REPO) {
-                checkoutScm(branchName: options.testsBranch, repositoryUrl: options.testRepo)
+                checkoutScm(branchName: options.testsBranch, repositoryUrl: "git@github.com:luxteam/jobs_test_rprviewer.git")
             }
 
             List lostStashes = []
 
             dir("summaryTestResults") {
-                unstashCrashInfo(options['nodeRetry'])
                 testResultList.each() {
                     dir("$it".replace("testResult-", "")) {
                         try {
-                            makeUnstash(name: "$it", storeOnNAS: options.storeOnNAS)
+                            makeUnstash(name: "$it")
                         } catch(e) {
-                            echo "Can't unstash ${it}"
+                            echo "[ERROR] Failed to unstash ${it}"
                             lostStashes.add("'$it'".replace("testResult-", ""))
                             println(e.toString())
                             println(e.getMessage())
@@ -533,16 +597,17 @@ def executeDeploy(Map options, List platformList, List testResultList)
                 }
             }
 
-            
             try {
                 dir("jobs_launcher") {
                     bat """
-                        count_lost_tests.bat \"${lostStashes}\" .. ..\\summaryTestResults \"${options.splitTestsExecution}\" \"${options.testsPackage}\" \"[]\" \"\" \"{}\"
+                    count_lost_tests.bat \"${lostStashes}\" .. ..\\summaryTestResults \"${options.splitTestsExecution}\" \"${options.testsPackage}\" \"[]\" \"\" \"{}\"
                     """
                 }
             } catch (e) {
                 println("[ERROR] Can't generate number of lost tests")
             }
+            
+            String branchName = env.BRANCH_NAME ?: options.projectBranch
 
             try {
                 GithubNotificator.updateStatus("Deploy", "Building test report", "in_progress", options, NotificationConfiguration.BUILDING_REPORT, "${BUILD_URL}")
@@ -553,8 +618,9 @@ def executeDeploy(Map options, List platformList, List testResultList)
                             JSON jsonResponse = JSONSerializer.toJSON(retryInfo, new JsonConfig())
                             writeJSON file: 'retry_info.json', json: jsonResponse, pretty: 4
                         }
-                       
-                        bat "build_reports.bat ..\\summaryTestResults ${getReportBuildArgs(options)}"
+                        bat """
+                            build_reports.bat ..\\summaryTestResults "RprViewer" ${options.commitSHA} ${branchName} \"${utils.escapeCharsByUnicode(options.commitMessage)}\"
+                        """
                     }
                 }
             } catch(e) {
@@ -565,13 +631,11 @@ def executeDeploy(Map options, List platformList, List testResultList)
                     println("[ERROR] Failed to build test report.")
                     println(e.toString())
                     println(e.getMessage())
-                    if (!options.testDataSaved && !options.storeOnNAS) {
+                    if (!options.testDataSaved) {
                         try {
                             // Save test data for access it manually anyway
                             utils.publishReport(this, "${BUILD_URL}", "summaryTestResults", "summary_report.html, performance_report.html, compare_report.html", \
-                                "Test Report", "Summary Report, Performance Report, Compare Report", options.storeOnNAS, \
-                                ["jenkinsBuildUrl": BUILD_URL, "jenkinsBuildName": currentBuild.displayName, "updatable": options.containsKey("reportUpdater")])
-                            
+                                "Test Report", "Summary Report, Performance Report, Compare Report")
                             options.testDataSaved = true 
                         } catch(e1) {
                             println("[WARNING] Failed to publish test data.")
@@ -641,8 +705,7 @@ def executeDeploy(Map options, List platformList, List testResultList)
 
             withNotifications(title: "Building test report", options: options, configuration: NotificationConfiguration.PUBLISH_REPORT) {
                 utils.publishReport(this, "${BUILD_URL}", "summaryTestResults", "summary_report.html, performance_report.html, compare_report.html", \
-                    "Test Report", "Summary Report, Performance Report, Compare Report", options.storeOnNAS, \
-                    ["jenkinsBuildUrl": BUILD_URL, "jenkinsBuildName": currentBuild.displayName, "updatable": options.containsKey("reportUpdater")])
+                    "Test Report", "Summary Report, Performance Report, Compare Report")
 
                 if (summaryTestResults) {
                     // add in description of status check information about tests statuses
@@ -653,163 +716,81 @@ def executeDeploy(Map options, List platformList, List testResultList)
                 }
             }
         }
-    } catch (e) {
+    } catch(e) {
         println(e.toString())
         println(e.getMessage())
         throw e
-    } finally {}
-}
-
-def appendPlatform(String filteredPlatforms, String platform) {
-    if (filteredPlatforms) {
-        filteredPlatforms +=  ";" + platform
-    } else {
-        filteredPlatforms += platform
     }
-    return filteredPlatforms
 }
 
-def call(String projectRepo = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonProRenderMaxPlugin.git",
-        String projectBranch = "",
-        String testsBranch = "master",
-        String platforms = 'Windows:AMD_WX9100,NVIDIA_GF1080TI,NVIDIA_RTX2080TI,AMD_RadeonVII,AMD_RX5700XT,AMD_RX6800',
-        String updateRefs = 'No',
-        Boolean enableNotifications = true,
-        Boolean incrementVersion = true,
-        String renderDevice = "2",
-        String testsPackage = "",
-        String tests = "",
-        String toolVersion = "2021",
-        Boolean forceBuild = false,
-        Boolean splitTestsExecution = true,
-        String resX = '0',
-        String resY = '0',
-        String SPU = '25',
-        String iter = '50',
-        String theshold = '0.05',
-        String customBuildLinkWindows = "",
-        String tester_tag = 'Max',
-        String mergeablePR = "",
-        String parallelExecutionTypeString = "TakeOneNodePerGPU")
+def call(String projectBranch = "",
+         String testsBranch = "master",
+         String platforms = 'Windows:AMD_RadeonVII,NVIDIA_RTX2080TI',
+         String updateRefs = 'No',
+         Boolean enableNotifications = true,
+         Boolean incrementVersion = true,
+         String testsPackage = "",
+         String tests = "",
+         Boolean splitTestsExecution = true,
+         String tester_tag = 'RprViewer',
+         String parallelExecutionTypeString = "TakeAllNodes",
+         Integer testCaseRetries = 3)
 {
     ProblemMessageManager problemMessageManager = new ProblemMessageManager(this, currentBuild)
     Map options = [:]
     options["stage"] = "Init"
     options["problemMessageManager"] = problemMessageManager
 
-    resX = (resX == 'Default') ? '0' : resX
-    resY = (resY == 'Default') ? '0' : resY
-    SPU = (SPU == 'Default') ? '60' : SPU
-    iter = (iter == 'Default') ? '120' : iter
-    theshold = (theshold == 'Default') ? '0.01' : theshold
     def nodeRetry = []
     Map errorsInSuccession = [:]
-    
+
     try {
         withNotifications(options: options, configuration: NotificationConfiguration.INITIALIZATION) {
-
-            Boolean isPreBuilt = customBuildLinkWindows.length() > 0
-
-            if (isPreBuilt) {
-                //remove platforms for which pre built plugin is not specified
-                String filteredPlatforms = ""
-
-                platforms.split(';').each() { platform ->
-                    List tokens = platform.tokenize(':')
-                    String platformName = tokens.get(0)
-
-                    switch (platformName) {
-                    case 'Windows':
-                        if (customBuildLinkWindows) {
-                            filteredPlatforms = appendPlatform(filteredPlatforms, platform)
-                        }
-                        break
-                    }
-                }
-
-                platforms = filteredPlatforms
-            }
-
-            gpusCount = 0
-            platforms.split(';').each() { platform ->
-                List tokens = platform.tokenize(':')
-                if (tokens.size() > 1) {
-                    gpuNames = tokens.get(1)
-                    gpuNames.split(',').each() {
-                        gpusCount += 1
-                    }
-                }
-            }
-
+            
             def parallelExecutionType = TestsExecutionType.valueOf(parallelExecutionTypeString)
 
             println "Platforms: ${platforms}"
             println "Tests: ${tests}"
             println "Tests package: ${testsPackage}"
-            println "Split tests execution: ${splitTestsExecution}"
             println "Tests execution type: ${parallelExecutionType}"
 
-            String prRepoName = ""
-            String prBranchName = ""
-            if (mergeablePR) {
-                String[] prInfo = mergeablePR.split(";")
-                prRepoName = prInfo[0]
-                prBranchName = prInfo[1]
-            }
-
-            options << [configuration: PIPELINE_CONFIGURATION,
-                        projectRepo:projectRepo,
-                        projectBranch:projectBranch,
-                        testRepo:"git@github.com:luxteam/jobs_test_max.git",
+            options << [projectBranch:projectBranch,
                         testsBranch:testsBranch,
                         updateRefs:updateRefs,
                         enableNotifications:enableNotifications,
-                        PRJ_NAME:"RadeonProRenderMaxPlugin",
-                        PRJ_ROOT:"rpr-plugins",
                         incrementVersion:incrementVersion,
-                        renderDevice:renderDevice,
-                        testsPackage:testsPackage,
-                        tests:tests,
-                        toolVersion:toolVersion,
-                        executeBuild:false,
-                        executeTests:isPreBuilt,
-                        isPreBuilt:isPreBuilt,
-                        forceBuild:forceBuild,
-                        reportName:'Test_20Report',
-                        splitTestsExecution:splitTestsExecution,
-                        gpusCount:gpusCount,
-                        TEST_TIMEOUT:180,
-                        ADDITIONAL_XML_TIMEOUT:30,
-                        NON_SPLITTED_PACKAGE_TIMEOUT:120,
+                        PRJ_NAME:'RadeonProViewer',
+                        PRJ_ROOT:'rpr-core',
+                        projectRepo:'git@github.com:Radeon-Pro/RadeonProViewer.git',
                         TESTER_TAG:tester_tag,
-                        resX: resX,
-                        resY: resY,
-                        SPU: SPU,
-                        iter: iter,
-                        theshold: theshold,
-                        customBuildLinkWindows: customBuildLinkWindows,
+                        executeBuild:true,
+                        executeTests:true,
+                        splitTestsExecution:splitTestsExecution,
+                        DEPLOY_FOLDER:"RprViewer",
+                        testsPackage:testsPackage,
+                        TEST_TIMEOUT:45,
+                        ADDITIONAL_XML_TIMEOUT:15,
+                        NON_SPLITTED_PACKAGE_TIMEOUT:45,
+                        DEPLOY_TIMEOUT:45,
+                        tests:tests,
                         nodeRetry: nodeRetry,
                         errorsInSuccession: errorsInSuccession,
+                        universePlatforms: universePlatforms,
                         problemMessageManager: problemMessageManager,
                         platforms:platforms,
-                        prRepoName:prRepoName,
-                        prBranchName:prBranchName,
                         parallelExecutionType:parallelExecutionType,
                         parallelExecutionTypeString: parallelExecutionTypeString,
-                        storeOnNAS: true,
-                        flexibleUpdates: true
+                        testCaseRetries:testCaseRetries
                         ]
-        }
+        } 
 
         multiplatform_pipeline(platforms, this.&executePreBuild, this.&executeBuild, this.&executeTests, this.&executeDeploy, options)
     } catch(e) {
         currentBuild.result = "FAILURE"
         println(e.toString())
         println(e.getMessage())
-
         throw e
     } finally {
         String problemMessage = options.problemMessageManager.publishMessages()
     }
-
 }

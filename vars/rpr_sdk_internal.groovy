@@ -11,7 +11,17 @@ import TestsExecutionType
 @Field final PipelineConfiguration PIPELINE_CONFIGURATION = new PipelineConfiguration(
     supportedOS: ["Windows"],
     productExtensions: ["Windows": "zip"],
-    artifactNameBase: "binCore"
+    artifactNameBase: "binCore",
+    testProfile: "engine",
+    displayingProfilesMapping: [
+        "engine": [
+            "Northstar64": "Northstar64",
+            "HybridPro": "HybridPro",
+            "Hybrid": "Hybrid",
+            "HIP": "HIP",
+            "HIPvsNS": "HIPvsNS"
+        ]
+    ]
 )
 
 
@@ -184,7 +194,7 @@ def executeTests(String osName, String asicName, Map options)
         } else {
             withNotifications(title: options["stageName"], printMessage: true, options: options, configuration: NotificationConfiguration.COPY_BASELINES) {
                 String baseline_dir = isUnix() ? "${CIS_TOOLS}/../TestResources/rpr_core_autotests_baselines" : "/mnt/c/TestResources/rpr_core_autotests_baselines"
-                println "[INFO] Downloading reference images for ${options.tests}"
+                println "[INFO] Downloading reference images for ${options.tests}-${options.engine}"
                 options.tests.split(" ").each() {
                     downloadFiles("${REF_PATH_PROFILE}/${it}", baseline_dir)
                 }
@@ -241,7 +251,6 @@ def executeTests(String osName, String asicName, Map options)
                             if (sessionReport.summary.total != sessionReport.summary.skipped){
                                 // remove brocken core package
                                 removeInstaller(osName: osName, options: options, extension: "zip")
-                                collectCrashInfo(osName, options, options.currentTry)
                                 String errorMessage
                                 if (options.currentTry < options.nodeReallocateTries) {
                                     errorMessage = "All tests were marked as error. The test group will be restarted."
@@ -278,7 +287,7 @@ def executeBuildWindows(Map options) {
         artifactUrl: "${BUILD_URL}/artifact/binCoreWin64.zip", configuration: NotificationConfiguration.BUILD_PACKAGE) {
         dir("RadeonProRenderSDK/RPR/RadeonProRender/lib/x64") {
             zip archive: true, dir: ".", glob: "", zipFile: "binCoreWin64.zip"
-            makeStash(includes: "binCoreWin64.zip", name: getProduct.getStashName("Windows"), preZip: false, storeOnNAS: options.storeOnNAS)
+            makeStash(includes: "binCoreWin64.zip", name: getProduct.getStashName("Windows", options), preZip: false, storeOnNAS: options.storeOnNAS)
         }
     }
 }
@@ -307,7 +316,7 @@ def executeBuild(String osName, Map options)
             }
         }
 
-        options[getProduct.getIdentificatorKey(osName)] = options.commitSHA
+        options[getProduct.getIdentificatorKey(osName, options)] = options.commitSHA
     } catch (e) {
         throw e
     } finally {
@@ -369,8 +378,6 @@ def executePreBuild(Map options)
         currentBuild.description += "<b>Commit SHA:</b> ${options.commitSHA}<br/>"
     }
 
-    def tests = []
-
     withNotifications(title: "Jenkins build configuration", options: options, configuration: NotificationConfiguration.CONFIGURE_TESTS) {
         dir('jobs_test_core') {
             checkoutScm(branchName: options.testsBranch, repositoryUrl: options.testRepo)
@@ -381,100 +388,73 @@ def executePreBuild(Map options)
             println "[INFO] Test branch hash: ${options['testsBranch']}"
 
             if (options.testsPackage != "none") {
+                def tests = []
                 // json means custom test suite. Split doesn't supported
                 def tempTests = readJSON file: "jobs/${options.testsPackage}"
                 tempTests["groups"].each() {
                     // TODO: fix: duck tape - error with line ending
                     tests << it.key
                 }
-                options.tests = tests
+
                 options.testsPackage = "none"
-            } else {
-                options.tests.split(" ").each() {
-                    tests << "${it}"
-                }
-                options.tests = tests
+                options.tests = tests.join(" ")          
             }
 
-            options.testsList = ['']
-            options.tests = tests.join(" ")
-        }
+            options.testsList = []
 
-        if (env.BRANCH_NAME && options.githubNotificator) {
-            options.githubNotificator.initChecks(options, "${BUILD_URL}")
+            options.engines.each(){ engine ->
+                options.testsList << "${engine}"
+            }
         }
     }
+
+    // make lists of raw profiles and lists of beautified profiles (displaying profiles)
+    multiplatform_pipeline.initProfiles(options)
 
     if (options.flexibleUpdates && multiplatform_pipeline.shouldExecuteDelpoyStage(options)) {
         options.reportUpdater = new ReportUpdater(this, env, options)
         options.reportUpdater.init(this.&getReportBuildArgs)
     }
+
+    if (env.BRANCH_NAME && options.githubNotificator) {
+        options.githubNotificator.initChecks(options, "${BUILD_URL}")
+    }
 }
 
 
-def executeDeploy(Map options, List platformList, List testResultList)
+def executeDeploy(Map options, List platformList, List testResultList, String engine)
 {
+    cleanWS()
     try {
-        cleanWS()
-
         if (options['executeTests'] && testResultList) {
-            withNotifications(title: "Building test report", options: options, startUrl: "${BUILD_URL}", configuration: NotificationConfiguration.BUILDING_UNIT_TESTS_REPORT) {
-                String reportFiles = ""
-                dir("SummaryReport") {
-                    testResultList.each() {
-                        String stashName = it.replace("testResult", "unitTestFailures")
+            String engineName = options.displayingTestProfiles[engine]
 
-                        try {
-                            if (!options.storeOnNAS) {
-                                makeUnstash(name: "${stashName}", storeOnNAS: options.storeOnNAS)
-                                reportFiles += ", ${stashName}_failures/report.html".replace("unitTestFailures-", "")
-                            } else if (options["failedConfigurations"].contains(stashName)) {
-                                reportFiles += ",../${it}_failures/report.html".replace("testResult-", "Test-")
-                            }
-                        } catch(e) {
-                            println("[ERROR] Can't unstash ${stashName}")
-                            println(e.toString())
-                            println(e.getMessage())
-                        }
-                    }
-                }
-
-                if (options.failedConfigurations.size() != 0) {
-                    utils.publishReport(this, "${BUILD_URL}", "SummaryReport", "${reportFiles.replaceAll('^,', '')}", "Failures Report", reportFiles.replaceAll('^,', '').replaceAll("\\.\\./", ""), options.storeOnNAS, ["jenkinsBuildUrl": BUILD_URL, "jenkinsBuildName": currentBuild.displayName])
-                }
-            }
-
-            withNotifications(title: "Building test report", options: options, configuration: NotificationConfiguration.DOWNLOAD_TESTS_REPO) {
+            withNotifications(title: "Building test report for ${engineName} engine", options: options, startUrl: "${BUILD_URL}", configuration: NotificationConfiguration.DOWNLOAD_TESTS_REPO) {
                 checkoutScm(branchName: options.testsBranch, repositoryUrl: options.testRepo)
             }
 
             List lostStashes = []
 
             dir("summaryTestResults") {
-                unstashCrashInfo(options['nodeRetry'])
-
                 testResultList.each() {
-                    def platformName = "$it".replace("testResult-", "")
+                    if (it.endsWith(engine)) {
+                        List testNameParts = it.replace("testResult-", "").split("-") as List
+                        String testName = testNameParts.subList(0, testNameParts.size() - 1).join("-")
 
-                    def platformNameParts = platformName.split("-")
-                    def asicName = platformNameParts[0]
-                    def osName = platformNameParts[1]
-
-                    // check that current platform is in list of platforms for which render should be executed
-                    if (!(options.renderPlatforms.contains(osName) && options.renderPlatforms.contains(asicName))) {
-                        return
-                    }
-
-                    dir(platformName) {
-                        try {
-                            makeUnstash(name: "$it", storeOnNAS: options.storeOnNAS)
-                        } catch(e) {
-                            println("Can't unstash ${it}")
-                            lostStashes.add("'$it'".replace("testResult-", ""))
-                            println(e.toString())
-                            println(e.getMessage())
+                        if (filter(options, testNameParts.get(0), testNameParts.get(1), testNameParts.get(2), engine)) {
+                            return
                         }
 
+                        dir(testName) {
+                            try {
+                                makeUnstash(name: "$it", storeOnNAS: options.storeOnNAS)
+                            } catch(e) {
+                                echo "[ERROR] Failed to unstash ${testName}"
+                                lostStashes.add("'${testName}'".replace("testResult-", ""))
+                                println(e.toString())
+                                println(e.getMessage())
+                            }
+                        }
                     }
                 }
             }
@@ -492,7 +472,7 @@ def executeDeploy(Map options, List platformList, List testResultList)
             try {
                 dir("jobs_launcher") {
                     bat """
-                        count_lost_tests.bat \"${lostStashes}\" .. ..\\summaryTestResults \"${options.splitTestsExecution}\" \"${options.testsPackage}\" \"${options.tests.toString()}\" \"\" \"{}\"
+                        count_lost_tests.bat \"${lostStashes}\" .. ..\\summaryTestResults \"false\" \"${options.testsPackage}\" \"${options.tests.toString()}\" \"${engine}\" \"{}\"
                     """
                 }
             } catch (e) {
@@ -501,7 +481,7 @@ def executeDeploy(Map options, List platformList, List testResultList)
 
             try {
                 String metricsRemoteDir = "/volume1/Baselines/TrackedMetrics/${env.JOB_NAME}/Northstar64"
-                GithubNotificator.updateStatus("Deploy", "Building test report", "in_progress", options, NotificationConfiguration.BUILDING_REPORT, "${BUILD_URL}")
+                GithubNotificator.updateStatus("Deploy", "Building test report for ${engineName} engine", "in_progress", options, NotificationConfiguration.BUILDING_REPORT, "${BUILD_URL}")
 
                 if (options.collectTrackedMetrics) {
                     utils.downloadMetrics(this, "summaryTestResults/tracked_metrics", "${metricsRemoteDir}/")
@@ -509,15 +489,13 @@ def executeDeploy(Map options, List platformList, List testResultList)
 
                 withEnv(["JOB_STARTED_TIME=${options.JOB_STARTED_TIME}", "BUILD_NAME=${options.baseBuildName}"]) {
                     dir("jobs_launcher") {
-                        options.commitMessage = options.commitMessage.replace("'", "")
-                        options.commitMessage = options.commitMessage.replace('"', '')
-
                         def retryInfo = JsonOutput.toJson(options.nodeRetry)
                         dir("..\\summaryTestResults") {
-                            JSON jsonResponse = JSONSerializer.toJSON(retryInfo, new JsonConfig());
+                            JSON jsonResponse = JSONSerializer.toJSON(retryInfo, new JsonConfig())
                             writeJSON file: 'retry_info.json', json: jsonResponse, pretty: 4
                         }
-                        bat "build_reports.bat ..\\summaryTestResults ${getReportBuildArgs(options)}"
+                    
+                        bat "build_reports.bat ..\\summaryTestResults ${getReportBuildArgs(engineName, options)}"
 
                         bat "get_status.bat ..\\summaryTestResults"
                     }
@@ -525,20 +503,21 @@ def executeDeploy(Map options, List platformList, List testResultList)
 
                 if (options.collectTrackedMetrics) {
                     utils.uploadMetrics(this, "summaryTestResults/tracked_metrics", metricsRemoteDir)
-                }
+                }  
             } catch(e) {
                 String errorMessage = utils.getReportFailReason(e.getMessage())
-                GithubNotificator.updateStatus("Deploy", "Building test report", "failure", options, errorMessage, "${BUILD_URL}")
+                GithubNotificator.updateStatus("Deploy", "Building test report ${engineName}", "failure", options, errorMessage, "${BUILD_URL}")
                 if (utils.isReportFailCritical(e.getMessage())) {
                     options.problemMessageManager.saveSpecificFailReason(errorMessage, "Deploy")
                     println("[ERROR] Failed to build test report.")
                     println(e.toString())
                     println(e.getMessage())
+
                     if (!options.testDataSaved && !options.storeOnNAS) {
                         try {
                             // Save test data for access it manually anyway
                             utils.publishReport(this, "${BUILD_URL}", "summaryTestResults", "summary_report.html, performance_report.html, compare_report.html", \
-                                "Test Report", "Summary Report, Performance Report, Compare Report", options.storeOnNAS, \
+                                "Test Report ${engineName}", "Summary Report, Performance Report, Compare Report", options.storeOnNAS, \
                                 ["jenkinsBuildUrl": BUILD_URL, "jenkinsBuildName": currentBuild.displayName, "updatable": options.containsKey("reportUpdater")])
 
                             options.testDataSaved = true 
@@ -576,8 +555,7 @@ def executeDeploy(Map options, List platformList, List testResultList)
                     currentBuild.result = "FAILURE"
 
                     options.problemMessageManager.saveGlobalFailReason(NotificationConfiguration.SOME_TESTS_ERRORED)
-                }
-                else if (summaryReport.failed > 0) {
+                } else if (summaryReport.failed > 0) {
                     println("[INFO] Some tests marked as failed. Build result = UNSTABLE.")
                     currentBuild.result = "UNSTABLE"
 
@@ -591,25 +569,17 @@ def executeDeploy(Map options, List platformList, List testResultList)
                 currentBuild.result = "UNSTABLE"
             }
 
-            try {
-                options.testsStatus = readFile("summaryTestResults/slack_status.json")
-            } catch(e) {
-                println(e.toString())
-                println(e.getMessage())
-                options.testsStatus = ""
-            }
-
             withNotifications(title: "Building test report", options: options, configuration: NotificationConfiguration.PUBLISH_REPORT) {
                 utils.publishReport(this, "${BUILD_URL}", "summaryTestResults", "summary_report.html, performance_report.html, compare_report.html", \
-                    "Test Report", "Summary Report, Performance Report, Compare Report", options.storeOnNAS, \
+                    "Test Report ${engineName}", "Summary Report, Performance Report, Compare Report", options.storeOnNAS, \
                     ["jenkinsBuildUrl": BUILD_URL, "jenkinsBuildName": currentBuild.displayName, "updatable": options.containsKey("reportUpdater")])
 
                 if (summaryTestResults) {
                     // add in description of status check information about tests statuses
                     // Example: Report was published successfully (passed: 69, failed: 11, error: 0)
-                    GithubNotificator.updateStatus("Deploy", "Building test report", "success", options, "${NotificationConfiguration.REPORT_PUBLISHED} Results: passed - ${summaryTestResults.passed}, failed - ${summaryTestResults.failed}, error - ${summaryTestResults.error}.", "${BUILD_URL}/Test_20Report")
+                    GithubNotificator.updateStatus("Deploy", "Building test report for ${engineName} engine", "success", options, "${NotificationConfiguration.REPORT_PUBLISHED} Results: passed - ${summaryTestResults.passed}, failed - ${summaryTestResults.failed}, error - ${summaryTestResults.error}.", "${BUILD_URL}/Test_20Report")
                 } else {
-                    GithubNotificator.updateStatus("Deploy", "Building test report", "success", options, NotificationConfiguration.REPORT_PUBLISHED, "${BUILD_URL}/Test_20Report")
+                    GithubNotificator.updateStatus("Deploy", "Building test report for ${engineName} engine", "success", options, NotificationConfiguration.REPORT_PUBLISHED, "${BUILD_URL}/Test_20Report")
                 }
             }
         }

@@ -12,7 +12,16 @@ import java.text.SimpleDateFormat
 @Field final PipelineConfiguration PIPELINE_CONFIGURATION = new PipelineConfiguration(
     supportedOS: ["Windows", "OSX", "Ubuntu20"],
     productExtensions: ["Windows": "zip", "OSX": "zip", "Ubuntu20": "zip"],
-    artifactNameBase: "BlenderUSDHydraAddon"
+    artifactNameBase: "BlenderUSDHydraAddon",
+    testProfile: "engine",
+    displayingProfilesMapping: [
+        "engine": [
+            "HdRprPlugin": "RPR",
+            "HdStormRendererPlugin": "GL",
+            "Hybrid": "Hybrid",
+            "HdPrmanLoaderRendererPlugin": "Prman"
+        ]
+    ]
 )
 
 @Field final String PROJECT_REPO = "git@github.com:GPUOpen-LibrariesAndSDKs/BlenderUSDHydraAddon.git"
@@ -70,22 +79,28 @@ def buildRenderCache(String osName, String toolVersion, String log_name, Integer
 }
 
 def executeTestCommand(String osName, String asicName, Map options) {
-    def test_timeout = options.timeouts["${options.parsedTests}"]
-    String testsNames = options.parsedTests
-    String testsPackageName = options.testsPackage
-    if (options.testsPackage != "none" && !options.isPackageSplitted) {
-        if (options.parsedTests.contains(".json")) {
+    def testTimeout = options.timeouts["${options.tests}"]
+    String testsNames
+    String testsPackageName
+
+    if (options.tests != "none" && !options.isPackageSplitted) {
+        if (options.tests.contains(".json")) {
             // if tests package isn't splitted and it's execution of this package - replace test group for non-splitted package by empty string
+            testsPackageName = options.tests
             testsNames = ""
         } else {
             // if tests package isn't splitted and it isn't execution of this package - replace tests package by empty string
             testsPackageName = "none"
+            testsNames = options.tests
         }
+    } else {
+        testsPackageName = "none"
+        testsNames = options.tests
     }
 
-    println "Set timeout to ${test_timeout}"
+    println "Set timeout to ${testTimeout}"
 
-    timeout(time: test_timeout, unit: 'MINUTES') { 
+    timeout(time: testTimeout, unit: 'MINUTES') { 
         switch(osName) {
         case 'Windows':
             dir('scripts') {
@@ -107,15 +122,12 @@ def executeTestCommand(String osName, String asicName, Map options) {
 
 
 def executeTests(String osName, String asicName, Map options) {
-    options.parsedTests = options.tests.split("-")[0]
-    options.engine = options.tests.split("-")[1]
-
     // used for mark stash results or not. It needed for not stashing failed tasks which will be retried.
     Boolean stashResults = true
 
     // FIXME: wait for Matlib optimization
     if (env.NODE_NAME == "PC-RENDERER-KABUL-WIN10") {
-        if (options.parsedTests.contains("Export_Import")) {
+        if (options.tests.contains("Export_Import")) {
             throw new ExpectedExceptionWrapper(
                 "System doesn't support Export_Import group", 
                 new Exception("System doesn't support Export_Import group")
@@ -125,7 +137,7 @@ def executeTests(String osName, String asicName, Map options) {
 
     // FIXME: Wait for new drivers / new plugin version to check difference
     if (env.NODE_NAME == "PC-TESTER-TOKYO-WIN10") {
-        if (options.parsedTests.contains("Camera") || options.parsedTests.contains("regression.0")) {
+        if (options.tests.contains("Camera") || options.tests.contains("regression.0")) {
             throw new ExpectedExceptionWrapper(
                 "System doesn't support Camera group", 
                 new Exception("System doesn't support Camera group")
@@ -134,7 +146,7 @@ def executeTests(String osName, String asicName, Map options) {
     }
 
     if (env.NODE_NAME == "PC-SR-ONTARIO-6800XT-WIN10") {
-        if (options.parsedTests.contains("USD_Nodes")) {
+        if (options.tests.contains("USD_Nodes")) {
             throw new ExpectedExceptionWrapper(
                 "System doesn't support USD_Nodes group", 
                 new Exception("System doesn't support USD_Nodes group")
@@ -224,8 +236,9 @@ def executeTests(String osName, String asicName, Map options) {
             withNotifications(title: options["stageName"], printMessage: true, options: options, configuration: NotificationConfiguration.COPY_BASELINES) {
                 String baseline_dir = isUnix() ? "${CIS_TOOLS}/../TestResources/usd_blender_autotests_baselines" : "/mnt/c/TestResources/usd_blender_autotests_baselines"
                 baseline_dir = enginePostfix ? "${baseline_dir}-${enginePostfix}" : baseline_dir
-                println "[INFO] Downloading reference images for ${options.parsedTests}"
-                options.parsedTests.split(" ").each() {
+                println "[INFO] Downloading reference images for ${options.tests}-${options.engine}"
+
+                options.tests.split(" ").each() {
                     if (it.contains(".json")) {
                         downloadFiles("${REF_PATH_PROFILE}/", baseline_dir)
                     } else {
@@ -305,9 +318,7 @@ def executeTests(String osName, String asicName, Map options) {
                         if (sessionReport.summary.total == sessionReport.summary.error + sessionReport.summary.skipped || sessionReport.summary.total == 0) {
                             // check that group isn't fully skipped
                             if (sessionReport.summary.total != sessionReport.summary.skipped || sessionReport.summary.total == 0) {
-                                collectCrashInfo(osName, options, options.currentTry)
                                 installBlenderAddon(osName, 'hdusd', options.toolVersion, options, false, true)
-                                // remove installer of broken addon
                                 removeInstaller(osName: osName, options: options, extension: "zip")
                                 String errorMessage
                                 if (options.currentTry < options.nodeReallocateTries) {
@@ -325,7 +336,7 @@ def executeTests(String osName, String asicName, Map options) {
                     }
                 }
             } else {
-                println "[INFO] Task ${options.tests} on ${options.nodeLabels} labels will be retried."
+                println "[INFO] Task ${options.tests}-${options.engine} on ${options.nodeLabels} labels will be retried."
             }
         } catch (e) {
             // throw exception in finally block only if test stage was finished
@@ -404,7 +415,7 @@ def executeBuildWindows(String osName, Map options, String pyVersion = "3.9") {
                         rename ${ARTIFACT_NAME} BlenderUSDHydraAddon_Windows.zip
                     """
 
-                    makeStash(includes: "BlenderUSDHydraAddon_Windows.zip", name: getProduct.getStashName("Windows"), preZip: false, storeOnNAS: options.storeOnNAS)
+                    makeStash(includes: "BlenderUSDHydraAddon_Windows.zip", name: getProduct.getStashName("Windows", options), preZip: false, storeOnNAS: options.storeOnNAS)
 
                     GithubNotificator.updateStatus("Build", "Windows", "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
                 }
@@ -482,7 +493,7 @@ def executeBuildLinux(String osName, Map options, String pyVersion = "3.9") {
                 """
 
                 if (options.toolVersion == "3.0" && pyVersion == "3.9" || options.toolVersion != "3.0" && pyVersion != "3.9") {
-                    makeStash(includes: "BlenderUSDHydraAddon_${osName}.zip", name: getProduct.getStashName(osName), preZip: false, storeOnNAS: options.storeOnNAS)
+                    makeStash(includes: "BlenderUSDHydraAddon_${osName}.zip", name: getProduct.getStashName(osName, options), preZip: false, storeOnNAS: options.storeOnNAS)
 
                     GithubNotificator.updateStatus("Build", "${osName}", "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
                 }
@@ -551,7 +562,7 @@ def executeBuild(String osName, Map options) {
                         executeBuildLinux(osName, options, it)                
                 }
             }
-            options[getProduct.getIdentificatorKey(osName)] = options.commitSHA
+            options[getProduct.getIdentificatorKey(osName, options)] = options.commitSHA
         }
     } catch (e) {
         throw e
@@ -800,18 +811,21 @@ def executePreBuild(Map options)
             options.tests = tests
         }
 
-        if (env.BRANCH_NAME && options.githubNotificator) {
-            options.githubNotificator.initChecks(options, "${BUILD_URL}")
-        }
-
         options.testsList = options.tests
 
         println "timeouts: ${options.timeouts}"
     }
 
+    // make lists of raw profiles and lists of beautified profiles (displaying profiles)
+    multiplatform_pipeline.initProfiles(options)
+
     if (options.flexibleUpdates && multiplatform_pipeline.shouldExecuteDelpoyStage(options)) {
         options.reportUpdater = new ReportUpdater(this, env, options)
         options.reportUpdater.init(this.&getReportBuildArgs)
+    }
+
+    if (env.BRANCH_NAME && options.githubNotificator) {
+        options.githubNotificator.initChecks(options, "${BUILD_URL}")
     }
 
     if (env.BRANCH_NAME && env.BRANCH_NAME == "master") {
@@ -829,7 +843,7 @@ def executePreBuild(Map options)
 def executeDeploy(Map options, List platformList, List testResultList, String engine) {
     cleanWS()
     try {
-        String engineName = options.enginesNames[options.engines.indexOf(engine)]
+        String engineName = options.displayingTestProfiles[engine]
 
         if (options['executeTests'] && testResultList) {
             withNotifications(title: "Building test report for ${engineName}", options: options, startUrl: "${BUILD_URL}", configuration: NotificationConfiguration.DOWNLOAD_TESTS_REPO) {
@@ -839,7 +853,6 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
             List lostStashes = []
 
             dir("summaryTestResults") {
-                unstashCrashInfo(options['nodeRetry'], engine)
                 testResultList.each() {
                     if (it.endsWith(engine)) {
                         List testNameParts = it.replace("testResult-", "").split("-") as List
@@ -1191,7 +1204,6 @@ def call(String projectRepo = PROJECT_REPO,
                         customBuildLinkUbuntu20: customBuildLinkUbuntu20,
                         customBuildLinkOSX: customBuildLinkOSX,
                         engines: formattedEngines,
-                        enginesNames:enginesNames,
                         nodeRetry: nodeRetry,
                         errorsInSuccession: errorsInSuccession,
                         platforms:platforms,

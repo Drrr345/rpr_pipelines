@@ -7,12 +7,34 @@ import net.sf.json.JsonConfig
 import TestsExecutionType
 
 
-@Field final String PROJECT_REPO = "git@github.com:amfdev/StreamingSDK.git"
-@Field final String TESTS_REPO = "git@github.com:luxteam/jobs_test_streaming_sdk.git"
-@Field final String DRIVER_REPO = "git@github.com:amfdev/AMDVirtualDrivers.git"
-@Field final String AMF_TESTS_REPO = "git@github.com:amfdev/AMFTests.git"
+@Field final String PROJECT_REPO = "https://github.com/amfdev/StreamingSDK.git"
+@Field final String TESTS_REPO = "https://github.com/luxteam/jobs_test_streaming_sdk.git"
+@Field final String DRIVER_REPO = "https://github.com/amfdev/AMDVirtualDrivers.git"
+@Field final String AMF_TESTS_REPO = "https://github.com/amfdev/AMFTests.git"
 @Field final Map driverTestsExecuted = new ConcurrentHashMap()
 @Field final List WEEKLY_REGRESSION_CONFIGURATION = ["HeavenDX11", "HeavenOpenGL", "ValleyDX11", "ValleyOpenGL", "Dota2Vulkan"]
+
+@Field final PipelineConfiguration PIPELINE_CONFIGURATION = new PipelineConfiguration(
+    supportedOS: ["Windows", "Android", "Ubuntu20"],
+    testProfile: "engine",
+    displayingProfilesMapping: [
+        "engine": [
+            "Valorant": "Valorant",
+            "LoL": "LoL",
+            "HeavenDX9": "HeavenDX9",
+            "HeavenDX11": "HeavenDX11",
+            "HeavenOpenGL": "HeavenOpenGL",
+            "ValleyDX9": "ValleyDX9",
+            "ValleyDX11": "ValleyDX11",
+            "ValleyOpenGL":"ValleyOpenGL", 
+            "Dota2DX11": "Dota2DX11",
+            "Dota2Vulkan": "Dota2Vulkan", 
+            "CSGO": "CSGO",
+            "Nothing": "Nothing",
+            "Empty": "Empty"
+        ]
+    ]
+)
 
 
 String getClientLabels(Map options) {
@@ -43,9 +65,7 @@ Boolean isIdleClient(Map options) {
             }
         }
 
-        def parsedTests = options.tests.split("-")[0]
-
-        if (options.multiconnectionConfiguration.second_win_client.any { parsedTests.contains(it) } || parsedTests == "regression.1.json~" || parsedTests == "regression.3.json~") {
+        if (options.multiconnectionConfiguration.second_win_client.any { options.tests.contains(it) } || options.tests == "regression.1.json~" || options.tests == "regression.3.json~") {
             result = false
 
             // wait multiconnection client machine
@@ -387,22 +407,26 @@ def closeGames(String osName, Map options, String gameName) {
 
 
 def executeTestCommand(String osName, String asicName, Map options, String executionType = "") {
-    String testsNames = options.parsedTests
-    String testsPackageName = options.testsPackage
+    String testsNames
+    String testsPackageName
     if (options.testsPackage != "none" && !options.isPackageSplitted) {
-        if (options.parsedTests.contains(".json")) {
+        if (options.tests.contains(".json")) {
             // if tests package isn't splitted and it's execution of this package - replace test package by test group and test group by empty string
-            testsPackageName = options.parsedTests
+            testsPackageName = options.tests
             testsNames = ""
         } else {
             // if tests package isn't splitted and it isn't execution of this package - replace tests package by empty string
             testsPackageName = "none"
+            testsNames = options.tests
         }
+    } else {
+        testsPackageName = "none"
+        testsNames = options.tests
     }
 
     // regression.json suite in weekly
     if (testsNames.contains("regression")) {
-        testsPackageName = options.parsedTests
+        testsPackageName = options.tests
         testsNames = ""
     }
 
@@ -646,7 +670,7 @@ def executeTestsServer(String osName, String asicName, Map options) {
                 if (osName == "Windows") {
                     initAndroidDevice()
 
-                    if (options.multiconnectionConfiguration.android_client.any { options.parsedTests.contains(it) } || options.parsedTests == "regression.2.json~" || options.parsedTests == "regression.3.json~") {
+                    if (options.multiconnectionConfiguration.android_client.any { options.tests.contains(it) } || options.tests == "regression.2.json~" || options.tests == "regression.3.json~") {
                         dir("StreamingSDKAndroid") {
                             prepareTool("Android", options)
                             installAndroidClient()
@@ -679,7 +703,7 @@ def executeTestsServer(String osName, String asicName, Map options) {
             sleep(5)
         }
 
-        if (options.multiconnectionConfiguration.second_win_client.any { options.tests.contains(it) } || options.parsedTests == "regression.1.json~" || options.parsedTests == "regression.3.json~") {
+        if (options.multiconnectionConfiguration.second_win_client.any { options.tests.contains(it) } || options.tests == "regression.1.json~" || options.tests == "regression.3.json~") {
             while (!options["mcClientInfo"]["ready"]) {
                 if (options["mcClientInfo"]["failed"]) {
                     throw new Exception("Multiconnection client was failed")
@@ -920,9 +944,6 @@ def executeTests(String osName, String asicName, Map options) {
     Boolean stashResults = true
 
     try {
-        options.parsedTests = options.tests.split("-")[0]
-        options.engine = options.tests.split("-")[1]
-
         if (osName == "Windows" || osName == "Ubuntu20") {
             options["clientInfo"] = new ConcurrentHashMap()
             options["serverInfo"] = new ConcurrentHashMap()
@@ -942,7 +963,7 @@ def executeTests(String osName, String asicName, Map options) {
                 }
             }
 
-            if (options.multiconnectionConfiguration.second_win_client.any { options.parsedTests.contains(it) } || options.parsedTests == "regression.1.json~" || options.parsedTests == "regression.3.json~") {
+            if (options.multiconnectionConfiguration.second_win_client.any { options.tests.contains(it) } || options.tests == "regression.1.json~" || options.tests == "regression.3.json~") {
                 threads["${options.stageName}-multiconnection-client"] = { 
                     node(getMulticonnectionClientLabels(options)) {
                         timeout(time: options.TEST_TIMEOUT, unit: "MINUTES") {
@@ -1419,6 +1440,9 @@ def executePreBuild(Map options) {
             options.executeTests = false
         }
 
+        // make lists of raw profiles and lists of beautified profiles (displaying profiles)
+        multiplatform_pipeline.initProfiles(options)
+
         if (env.BRANCH_NAME && options.githubNotificator) {
             options.githubNotificator.initChecks(options, "${BUILD_URL}")
 
@@ -1441,7 +1465,6 @@ def executeDeploy(Map options, List platformList, List testResultList, String ga
             List lostStashesWindows = []
             List lostStashesAndroid = []
             dir("summaryTestResults") {
-                unstashCrashInfo(options["nodeRetry"])
                 testResultList.each {
                     Boolean groupLost = false
 
@@ -1820,7 +1843,8 @@ def call(String projectBranch = "",
             String branchName = env.BRANCH_NAME ?: projectBranch
             Boolean isDevelopBranch = (branchName == "origin/develop" || branchName == "develop")
 
-            options << [projectRepo: PROJECT_REPO,
+            options << [configuration: PIPELINE_CONFIGURATION,
+                        projectRepo: PROJECT_REPO,
                         projectBranch: projectBranch,
                         testsBranch: testsBranch,
                         enableNotifications: false,
@@ -1849,7 +1873,6 @@ def call(String projectBranch = "",
                         testsPreCondition: this.&isIdleClient,
                         testCaseRetries: testCaseRetries,
                         engines: games.split(",") as List,
-                        enginesNames: games.split(",") as List,
                         games: games,
                         clientCollectTraces:clientCollectTraces,
                         serverCollectTraces:serverCollectTraces,

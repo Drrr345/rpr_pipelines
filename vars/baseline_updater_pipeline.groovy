@@ -16,7 +16,8 @@ import groovy.json.JsonSlurperClassic
     "usd_viewer": "usd_rprviewer_autotests",
     "USD": "rpr_usdplugin_autotests",
     "maya_usd": "usd_maya_autotests",
-    "anari": "rpr_anari_autotests"
+    "anari": "rpr_anari_autotests",
+    "render_studio": "render_studio_autotests"
 ]
 
 @Field final Map PROJECT_MAPPING = [
@@ -28,7 +29,8 @@ import groovy.json.JsonSlurperClassic
     "inventor": "Inventor",
     "USD": "Houdini",
     "maya_usd": "Maya USD",
-    "anari": "Anari"
+    "anari": "Anari",
+    "render_studio": "Render Studio"
 ]
 
 @Field final Map ENGINE_REPORT_MAPPING = [
@@ -42,7 +44,9 @@ import groovy.json.JsonSlurperClassic
     "hdstormrendererplugin": "GL",
     "rpr": "RPR",
     "gl": "GL",
-    "hip": "HIP"
+    "hip": "HIP",
+    "web": "Web",
+    "desktop": "Desktop"
 ]
 
 @Field final Map ENGINE_BASELINES_MAPPING = [
@@ -56,7 +60,9 @@ import groovy.json.JsonSlurperClassic
     "hdstormrendererplugin": "GL",
     "gl": "GL",
     "rpr": "RPR",
-    "hip": "HIP"
+    "hip": "HIP",
+    "web": "Web",
+    "desktop": "Desktop"
 ]
 
 
@@ -86,6 +92,8 @@ def call(String jobName,
     String toolName,
     String updateType,
     Boolean allPlatforms=false) {
+
+    // TODO: in future it can be required to replace engines by profiles
 
     stage("UpdateBaselines") {
         node("Windows && !NoBaselinesUpdate") {

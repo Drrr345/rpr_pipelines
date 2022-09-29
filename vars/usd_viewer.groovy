@@ -16,7 +16,7 @@ import TestsExecutionType
 @Field final PipelineConfiguration PIPELINE_CONFIGURATION = new PipelineConfiguration(
     supportedOS: ["Windows"],
     productExtensions: ["Windows": "exe"],
-    artifactNameBase: "RPRInventorPlugin_Setup"
+    artifactNameBase: "RPRViewer_Setup"
 )
 
 
@@ -37,12 +37,6 @@ def updateMap(def keyName, String installationType, String status) {
 
 
 def checkExistenceOfPlugin(String osName, Map options) {
-    String defaultUninstallerPath = "C:\\Users\\${env.USERNAME}\\AppData\\Roaming\\Autodesk\\ApplicationPlugins\\RadeonProRender\\unins000.exe"
-
-    return fileExists(defaultUninstallerPath)
-}
-
-def checkExistenceOfRPRViewer(String osName, Map options) {
     String defaultUninstallerPath = "C:\\Program Files\\RPRViewer\\unins000.exe"
     String customUninstallerPath = "${CUSTOM_INSTALL_PATH}\\unins000.exe"
 
@@ -67,7 +61,7 @@ def installInventorPlugin(String osName, Map options, Boolean cleanInstall=true,
     String installerName = ""
     String dirOption = ""
     String logPostfix
-    
+
     if (cleanInstall) {
         if (customPathInstall) {
             logPostfix = "custom_path"
@@ -83,40 +77,27 @@ def installInventorPlugin(String osName, Map options, Boolean cleanInstall=true,
         installerName = customPluginName
         logPostfix = "_custom"
     } else if (options['isPreBuilt']) {
-        installerName = "${options[getProduct.getIdentificatorKey('Windows')]}.exe"
+        installerName = "${options[getProduct.getIdentificatorKey('Windows', options)]}.exe"
     } else {
         installerName = "${options.commitSHA}.exe"
     }
 
-    if (cleanInstall) {
-        try {
-            if (checkExistenceOfRPRViewer(osName, options)) {
-                println "[INFO] Uninstalling RPRViewer"
-                bat """
-                    start "" /wait "${getUninstallerPath()}" /SILENT /NORESTART /LOG=${options.stageName}_${logPostfix}_${options.currentTry}.uninstall_RPRViewer.log
-                """
-            }
-        } catch (e) {
-            throw new Exception("Failed to uninstall old RPRViewer")
+    try {
+        if (cleanInstall && checkExistenceOfPlugin(osName, options)) {
+            println "[INFO] Uninstalling Inventor Plugin"
+            bat """
+                start "" /wait "${getUninstallerPath()}" /SILENT /NORESTART /LOG=${options.stageName}_${logPostfix}_${options.currentTry}.uninstall.log
+            """
         }
-
-        try {
-            if (checkExistenceOfPlugin(osName, options)) {
-                println "[INFO] Uninstalling Inventor Plugin"
-                bat """
-                    start "" /wait "C:\\Users\\${env.USERNAME}\\AppData\\Roaming\\Autodesk\\ApplicationPlugins\\RadeonProRender\\unins000.exe" /SILENT /NORESTART /LOG=${options.stageName}_${logPostfix}_${options.currentTry}.uninstall_Plugin.log
-                """
-            }
-        } catch (e) {
-            throw new Exception("Failed to uninstall old plugin")
-        }
-    }
+    } catch (e) {
+        throw new Exception("Failed to uninstall old plugin")
+    } 
 
     try {
         println "[INFO] Install Inventor Plugin"
 
         bat """
-            start /wait ${CIS_TOOLS}\\..\\PluginsBinaries\\${installerName} /SILENT /NORESTART ${dirOption} /LOG=${options.stageName}${logPostfix}_${options.currentTry}.install${logPostfix}.log /ViewerSilent=True /ViewerNoRestart=True
+            start /wait ${CIS_TOOLS}\\..\\PluginsBinaries\\${installerName} /SILENT /NORESTART ${dirOption} /LOG=${options.stageName}${logPostfix}_${options.currentTry}.install${logPostfix}.log
         """
     } catch (e) {
         throw new Exception("Failed to install new plugin")
@@ -124,16 +105,17 @@ def installInventorPlugin(String osName, Map options, Boolean cleanInstall=true,
 }
 
 
-def buildRenderCache(String osName, String toolVersion, Map options, Boolean cleanInstall=true, Boolean customPathInstall=false) {
+def buildRenderCache(String osName, Map options, Boolean cleanInstall=true, Boolean customPathInstall=false) {
     String logPostfix = cleanInstall ? "clean" : "dirt"
     logPostfix = customPathInstall ? "custom_path" : logPostfix
+    String toolPath = customPathInstall ? "${CUSTOM_INSTALL_PATH}\\RPRViewer.exe" : "C:\\Program Files\\RPRViewer\\RPRViewer.exe"
 
     dir("scripts") {
         switch(osName) {
             case 'Windows':
                 bat """
                     if exist ${devicesConfigPath} del ${devicesConfigPath}
-                    build_usd_cache.bat Inventor ${toolVersion} >> \"..\\${options.stageName}_${logPostfix}_${options.currentTry}.cb.log\"  2>&1
+                    build_usd_cache.bat RPRViewer "" "${toolPath}" >> "..\\${options.stageName}_${logPostfix}_${options.currentTry}.cb.log"  2>&1
                 """
                 break
             case "OSX":
@@ -151,7 +133,7 @@ def executeGenTestRefCommand(String osName, Map options, Boolean delete) {
         switch (osName) {
             case "Windows":
                 bat """
-                    make_results_baseline.bat ${delete} Inventor
+                    make_results_baseline.bat ${delete} RPRViewer
                 """
                 break
 
@@ -190,7 +172,7 @@ def executeTestCommand(String osName, String asicName, Map options) {
                     dir('scripts') {
                         bat """
                             set TOOL_VERSION=${options.pluginVersion}
-                            run.bat \"${testsPackageName}\" \"${testsNames}\" Inventor 2023 ${options.testCaseRetries} ${options.updateRefs} 1>> \"../${options.stageName}_${options.currentTry}.log\"  2>&1
+                            run.bat \"${testsPackageName}\" \"${testsNames}\" RPRViewer 2022 ${options.testCaseRetries} ${options.updateRefs} 1>> \"../${options.stageName}_${options.currentTry}.log\"  2>&1
                         """
                     }
                     break
@@ -210,7 +192,6 @@ def executeTestCommand(String osName, String asicName, Map options) {
 def executeTests(String osName, String asicName, Map options) {
     // used for mark stash results or not. It needed for not stashing failed tasks which will be retried.
     Boolean stashResults = true
-
     try {
         if (env.NODE_NAME == "PC-TESTER-MILAN-WIN10") {
             if (options.tests.contains("CPU") || options.tests.contains("weekly.2") || options.tests.contains("regression.2")) {
@@ -235,19 +216,11 @@ def executeTests(String osName, String asicName, Map options) {
         }
 
         withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.DOWNLOAD_SCENES) {
-            String assetsDir = isUnix() ? "${CIS_TOOLS}/../TestResources/usd_inventor_autotests_assets" : "/mnt/c/TestResources/usd_inventor_autotests_assets"
-            downloadFiles("/volume1/web/Assets/usd_inventor_autotests/", assetsDir)
+            String assetsDir = isUnix() ? "${CIS_TOOLS}/../TestResources/usd_rprviewer_autotests_assets" : "/mnt/c/TestResources/usd_rprviewer_autotests_assets"
+            downloadFiles("/volume1/web/Assets/usd_rprviewer_autotests/", assetsDir)
         }
 
-        withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.DOWNLOAD_PREFERENCES) {
-            timeout(time: "5", unit: "MINUTES") {
-                String prefsDir = "/mnt/c/Users/${env.USERNAME}/AppData/Roaming/Autodesk/Inventor 2023"
-                downloadFiles("/volume1/CIS/tools-preferences/Inventor/${osName}/2023/*", prefsDir, "", false)
-                bat "reg import \"${prefsDir.replace("/mnt/c", "C:").replace("/", "\\")}\\inventor_window.reg\""
-            }
-        }
-
-        installsPerformedMap.putIfAbsent("${asicName}-${osName}", ['dirt': ['tries': 0, 'status': 'active']])
+        installsPerformedMap.putIfAbsent("${asicName}-${osName}", ['dirt': ['tries': 0, 'status': 'active'], 'custom_path': ['tries': 0, 'status': 'active']])
 
         if (shouldInstallationPerform("${asicName}-${osName}", 'dirt', options.nodeReallocateTries)) {
             try {
@@ -276,9 +249,9 @@ def executeTests(String osName, String asicName, Map options) {
             
 
                 withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.BUILD_CACHE_DIRT) {                        
-                    timeout(time: "20", unit: "MINUTES") {
+                    timeout(time: "15", unit: "MINUTES") {
                         try {
-                            buildRenderCache(osName, "2023", options, false)
+                            buildRenderCache(osName, options, false)
                         } catch (e) {
                             throw e
                         } finally {
@@ -303,6 +276,42 @@ def executeTests(String osName, String asicName, Map options) {
             updateMap("${asicName}-${osName}", 'dirt', 'success')
         }
 
+        if (shouldInstallationPerform("${asicName}-${osName}", 'custom_path', options.nodeReallocateTries)) {
+            try {
+                withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.INSTALL_PLUGIN_CUSTOM_PATH) {
+                    timeout(time: "15", unit: "MINUTES") {
+                        installInventorPlugin(osName, options, true, true)
+                    }
+                }
+            
+                withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.BUILD_CACHE_CUSTOM_PATH) {                        
+                    timeout(time: "15", unit: "MINUTES") {
+                        try {
+                            buildRenderCache(osName, options, true, true)
+                        } catch (e) {
+                            throw e
+                        } finally {
+                            dir("scripts") {
+                                utils.renameFile(this, osName, "cache_building_results", "${options.stageName}_custom_path_${options.currentTry}")
+                                archiveArtifacts artifacts: "${options.stageName}_custom_path_${options.currentTry}/*.jpg", allowEmptyArchive: true
+                            }
+                        }
+                        dir("scripts") {
+                            String cacheImgPath = "./${options.stageName}_custom_path_${options.currentTry}/RESULT.jpg"
+                            if(!fileExists(cacheImgPath)){
+                                throw new ExpectedExceptionWrapper(NotificationConfiguration.NO_OUTPUT_IMAGE, new Exception(NotificationConfiguration.NO_OUTPUT_IMAGE))
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                updateMap("${asicName}-${osName}", 'custom_path', 'failed')
+                throw e
+            }
+
+            updateMap("${asicName}-${osName}", 'custom_path', 'success')
+        }
+
         withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.INSTALL_PLUGIN_CLEAN) {
             timeout(time: "15", unit: "MINUTES") {
                 installInventorPlugin(osName, options, true)
@@ -310,9 +319,9 @@ def executeTests(String osName, String asicName, Map options) {
         }
     
         withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.BUILD_CACHE_CLEAN) {                        
-            timeout(time: "20", unit: "MINUTES") {
+            timeout(time: "15", unit: "MINUTES") {
                 try {
-                    buildRenderCache(osName, "2023", options, true)
+                    buildRenderCache(osName, options, true)
                 } catch (e) {
                     throw e
                 } finally {
@@ -330,7 +339,7 @@ def executeTests(String osName, String asicName, Map options) {
             }
         }
 
-        String REF_PATH_PROFILE="/volume1/Baselines/usd_inventor_autotests/${asicName}-${osName}"
+        String REF_PATH_PROFILE="/volume1/Baselines/usd_rprviewer_autotests/${asicName}-${osName}"
         options.REF_PATH_PROFILE = REF_PATH_PROFILE
 
         outputEnvironmentInfo(osName, "", options.currentTry)
@@ -356,7 +365,7 @@ def executeTests(String osName, String asicName, Map options) {
             }
         } else {
             withNotifications(title: options["stageName"], printMessage: true, options: options, configuration: NotificationConfiguration.COPY_BASELINES) {
-                String baselineDir = isUnix() ? "${CIS_TOOLS}/../TestResources/usd_inventor_autotests_baselines" : "/mnt/c/TestResources/usd_inventor_autotests_baselines"
+                String baselineDir = isUnix() ? "${CIS_TOOLS}/../TestResources/usd_rprviewer_autotests_baselines" : "/mnt/c/TestResources/usd_rprviewer_autotests_baselines"
                 println "[INFO] Downloading reference images for ${options.tests}"
                 options.tests.split(" ").each { downloadFiles("${REF_PATH_PROFILE}/${it.contains(".json") ? "" : it}", baselineDir) }
             }
@@ -391,10 +400,10 @@ def executeTests(String osName, String asicName, Map options) {
             archiveArtifacts artifacts: "${options.stageName}/*.log", allowEmptyArchive: true
             if (stashResults) {
                 dir('Work') {
-                    if (fileExists("Results/Inventor/session_report.json")) {
+                    if (fileExists("Results/RPRViewer/session_report.json")) {
 
-                        def sessionReport = readJSON file: 'Results/Inventor/session_report.json'
-                        
+                        def sessionReport = readJSON file: 'Results/RPRViewer/session_report.json'
+
                         if (sessionReport.summary.error > 0) {
                             GithubNotificator.updateStatus("Test", options['stageName'], "action_required", options, NotificationConfiguration.SOME_TESTS_ERRORED, "${BUILD_URL}")
                         } else if (sessionReport.summary.failed > 0) {
@@ -411,7 +420,6 @@ def executeTests(String osName, String asicName, Map options) {
                             if (sessionReport.summary.total != sessionReport.summary.skipped) {
                                 // remove broken usdviewer
                                 removeInstaller(osName: osName, options: options, extension: "zip")
-                                collectCrashInfo(osName, options, options.currentTry)
                                 String errorMessage = (options.currentTry < options.nodeReallocateTries) ? "All tests were marked as error. The test group will be restarted." : "All tests were marked as error."
                                 throw new ExpectedExceptionWrapper(errorMessage, new Exception(errorMessage))
                             }
@@ -446,83 +454,70 @@ def executeTests(String osName, String asicName, Map options) {
 
 def executeBuildWindows(Map options) {
     withEnv(["PATH=c:\\python37\\;c:\\CMake323\\bin;c:\\python37\\scripts\\;${PATH}", "WORKSPACE=${env.WORKSPACE.toString().replace('\\', '/')}"]) {
-        dir("RPRViewer") {
-            outputEnvironmentInfo("Windows", "${STAGE_NAME}.EnvVariables")
+        outputEnvironmentInfo("Windows", "${STAGE_NAME}.EnvVariables")
 
-            // vcvars64.bat sets VS/msbuild env
-            withNotifications(title: "Windows", options: options, logUrl: "${BUILD_URL}/artifact/${STAGE_NAME}.HdRPRPlugin.log", configuration: NotificationConfiguration.BUILD_SOURCE_CODE) {
+        // vcvars64.bat sets VS/msbuild env
+        withNotifications(title: "Windows", options: options, logUrl: "${BUILD_URL}/artifact/${STAGE_NAME}.HdRPRPlugin.log", configuration: NotificationConfiguration.BUILD_SOURCE_CODE) {
+            bat """
+                call "C:\\Program Files (x86)\\Microsoft Visual Studio\\2017\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat" >> ${STAGE_NAME}.EnvVariables.log 2>&1
+
+                RPRViewer\\tools\\build_usd_windows.bat >> ${STAGE_NAME}.USDPixar.log 2>&1
+            """
+
+            bat """
+                RPRViewer\\tools\\build_hdrpr_windows.bat >> ${STAGE_NAME}.HdRPRPlugin.log 2>&1
+            """
+
+            bat """
+                RPRViewer\\tools\\build_compatibility_checker_windows.bat >> ${STAGE_NAME}.CompatibilityChecker.log 2>&1
+            """
+        }
+        String buildName = "RadeonProUSDViewer_Windows.zip"
+        withNotifications(title: "Windows", options: options, configuration: NotificationConfiguration.BUILD_PACKAGE_USD_VIEWER)  {
+            // delete files before zipping
+            bat """
+                del RPRViewer\\binary\\windows\\inst\\pxrConfig.cmake
+                rmdir /Q /S RPRViewer\\binary\\windows\\inst\\cmake
+                rmdir /Q /S RPRViewer\\binary\\windows\\inst\\include
+                rmdir /Q /S RPRViewer\\binary\\windows\\inst\\lib\\cmake
+                rmdir /Q /S RPRViewer\\binary\\windows\\inst\\lib\\pkgconfig
+                del RPRViewer\\binary\\windows\\inst\\bin\\*.lib
+                del RPRViewer\\binary\\windows\\inst\\bin\\*.pdb
+                del RPRViewer\\binary\\windows\\inst\\lib\\*.lib
+                del RPRViewer\\binary\\windows\\inst\\lib\\*.pdb
+                del RPRViewer\\binary\\windows\\inst\\plugin\\usd\\*.lib
+            """
+
+            withEnv(["PYTHONPATH=%INST%\\lib\\python;%INST%\\lib"]) {
                 bat """
-                    call "C:\\Program Files (x86)\\Microsoft Visual Studio\\2017\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat" >> ${STAGE_NAME}.EnvVariables.log 2>&1
-
-                    RPRViewer\\tools\\build_usd_windows.bat >> ..\\${STAGE_NAME}.USDPixar.log 2>&1
+                    RPRViewer\\tools\\build_package_windows.bat >> ${STAGE_NAME}.USDViewerPackage.log 2>&1
                 """
 
+                //TODO: remove after fix
                 bat """
-                    RPRViewer\\tools\\build_hdrpr_windows.bat >> ..\\${STAGE_NAME}.HdRPRPlugin.log 2>&1
+                    copy LICENSE.txt RPRViewer\\LICENSE.txt
                 """
 
-                bat """
-                    RPRViewer\\tools\\build_compatibility_checker_windows.bat >> ..\\${STAGE_NAME}.CompatibilityChecker.log 2>&1
-                """
-            }
-            String buildName = "RadeonProUSDViewer_Windows.zip"
-            withNotifications(title: "Windows", options: options, configuration: NotificationConfiguration.BUILD_PACKAGE_USD_VIEWER)  {
-                // delete files before zipping
-                bat """
-                    del RPRViewer\\binary\\windows\\inst\\pxrConfig.cmake
-                    rmdir /Q /S RPRViewer\\binary\\windows\\inst\\cmake
-                    rmdir /Q /S RPRViewer\\binary\\windows\\inst\\include
-                    rmdir /Q /S RPRViewer\\binary\\windows\\inst\\lib\\cmake
-                    rmdir /Q /S RPRViewer\\binary\\windows\\inst\\lib\\pkgconfig
-                    del RPRViewer\\binary\\windows\\inst\\bin\\*.lib
-                    del RPRViewer\\binary\\windows\\inst\\bin\\*.pdb
-                    del RPRViewer\\binary\\windows\\inst\\lib\\*.lib
-                    del RPRViewer\\binary\\windows\\inst\\lib\\*.pdb
-                    del RPRViewer\\binary\\windows\\inst\\plugin\\usd\\*.lib
-                """
-
-                withEnv(["PYTHONPATH=%INST%\\lib\\python;%INST%\\lib"]) {
+                dir("RPRViewer") {
                     bat """
-                        RPRViewer\\tools\\build_package_windows.bat >> ..\\${STAGE_NAME}.USDViewerPackage.log 2>&1
+                        "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe" installer.iss >> ..\\${STAGE_NAME}.USDViewerInstaller.log 2>&1
                     """
 
-                    //TODO: remove after fix
-                    bat """
-                        copy LICENSE.txt RPRViewer\\LICENSE.txt
-                    """
+                    makeStash(includes: "RPRViewer_Setup.exe", name: getProduct.getStashName("Windows", options), preZip: false, storeOnNAS: options.storeOnNAS)
 
-                    dir("RPRViewer") {
+                    if (options.branch_postfix) {
                         bat """
-                            "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe" installer.iss >> ..\\..\\${STAGE_NAME}.USDViewerInstaller.log 2>&1
-                            move RPRViewer_Setup.exe ..\\..\\RPRViewer_Setup.exe
+                            rename RPRViewer_Setup.exe RPRViewer_Setup_${options.pluginVersion}_(${options.branch_postfix}).exe
                         """
                     }
+
+                    String ARTIFACT_NAME = options.branch_postfix ? "RPRViewer_Setup_${options.pluginVersion}_(${options.branch_postfix}).exe" : "RPRViewer_Setup.exe"
+                    String artifactURL = makeArchiveArtifacts(name: ARTIFACT_NAME, storeOnNAS: options.storeOnNAS)
+
+                    GithubNotificator.updateStatus("Build", "Windows", "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
                 }
             }
         }
-
-        dir("tools") {
-            bat """
-                build_releases.cmd >> ..\\${STAGE_NAME}.BuildReleases.log 2>&1
-            """
-        }
-
-        bat """
-            "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe" rprplugin_installer.iss >> ${STAGE_NAME}.RPRInventorPluginInstaller.log 2>&1
-        """
-
-        makeStash(includes: "RPRInventorPlugin_Setup.exe", name: getProduct.getStashName("Windows"), preZip: false, storeOnNAS: options.storeOnNAS)
-
-        if (options.branch_postfix) {
-            bat """
-                rename RPRInventorPlugin_Setup.exe RPRInventorPlugin_Setup_${options.pluginVersion}_(${options.branch_postfix}).exe
-            """
-        }
-
-        String ARTIFACT_NAME = options.branch_postfix ? "RPRInventorPlugin_Setup_${options.pluginVersion}_(${options.branch_postfix}).exe" : "RPRInventorPlugin_Setup.exe"
-        String artifactURL = makeArchiveArtifacts(name: ARTIFACT_NAME, storeOnNAS: options.storeOnNAS)
-
-        GithubNotificator.updateStatus("Build", "Windows", "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
     }
 }
 
@@ -580,7 +575,6 @@ def executeBuildOSX(Map options)
             String BUILD_NAME = options.branch_postfix ? "RPRViewer_Setup_${options.pluginVersion}_(${options.branch_postfix}).zip" : "RadeonProUSDViewer_Package_OSX.zip"
             String pluginUrl = "${BUILD_URL}artifact/${BUILD_NAME}"
             rtp nullAction: "1", parserName: "HTML", stableText: """<h3><a href="${pluginUrl}">[BUILD: ${BUILD_ID}] ${BUILD_NAME}</a></h3>"""
-
         }
     }
     
@@ -605,7 +599,7 @@ def executeBuild(String osName, Map options) {
             }
         }
 
-        options[getProduct.getIdentificatorKey(osName)] = options.commitSHA
+        options[getProduct.getIdentificatorKey(osName, options)] = options.commitSHA
     }
     finally {
         archiveArtifacts artifacts: "*.log", allowEmptyArchive: true
@@ -614,7 +608,7 @@ def executeBuild(String osName, Map options) {
 
 def getReportBuildArgs(Map options) {
     boolean collectTrackedMetrics = (env.JOB_NAME.contains("Weekly") || (env.JOB_NAME.contains("Manual") && (options.testsPackageOriginal == "weekly.json" || options.testsPackageOriginal == "Full.json")))
-
+    
     if (options["isPreBuilt"]) {
         return """USDViewer "PreBuilt" "PreBuilt" "PreBuilt" \"\" ${collectTrackedMetrics ? env.BUILD_NUMBER : ""}"""
     } else {
@@ -654,7 +648,7 @@ def executePreBuild(Map options) {
     if (!options['isPreBuilt']) {
 
         withNotifications(title: "Jenkins build configuration", options: options, configuration: NotificationConfiguration.DOWNLOAD_SOURCE_CODE_REPO) {
-            checkoutScm(branchName: options.projectBranch, repositoryUrl: options.projectRepo, submoduleDepth: 1)
+            checkoutScm(branchName: options.projectBranch, repositoryUrl: options.projectRepo, disableSubmodules: true)
         }
 
         options.commitAuthor = utils.getBatOutput(this, "git show -s --format=%%an HEAD ")
@@ -670,7 +664,7 @@ def executePreBuild(Map options) {
         """
 
         withNotifications(title: "Jenkins build configuration", options: options, configuration: NotificationConfiguration.INCREMENT_VERSION) {
-            options.pluginVersion = version_read("${env.WORKSPACE}\\rprplugin_installer.iss", 'AppVersion=')
+            options.pluginVersion = version_read("${env.WORKSPACE}\\RPRViewer\\src\\application\\version.py", 'USD_VIEWER_BUILD_VERSION = "')
 
             if (options['incrementVersion']) {
                 withNotifications(title: "Jenkins build configuration", printMessage: true, options: options, configuration: NotificationConfiguration.CREATE_GITHUB_NOTIFICATOR) {
@@ -681,20 +675,34 @@ def executePreBuild(Map options) {
                     options.projectBranchName = githubNotificator.branchName
                 }
                 
-                if (env.BRANCH_NAME == "master" && !options.commitMessage.contains("buildmaster: version update to")) {
+                if (env.BRANCH_NAME == "master" && options.commitAuthor != "radeonprorender") {
 
                     println "[INFO] Incrementing version of change made by ${options.commitAuthor}."
                     println "[INFO] Current build version: ${options.pluginVersion}"
 
-                    def new_plugin_version = version_inc(options.pluginVersion, 2)
+                    def new_plugin_version = version_inc(options.pluginVersion, 3)
                     println "[INFO] New build version: ${new_plugin_version}"
-                    version_write("${env.WORKSPACE}\\rprplugin_installer.iss", 'AppVersion=', new_plugin_version)
+                    version_write("${env.WORKSPACE}\\RPRViewer\\src\\application\\version.py", 'USD_VIEWER_BUILD_VERSION = "', new_plugin_version)
 
-                    options.pluginVersion = version_read("${env.WORKSPACE}\\rprplugin_installer.iss", 'AppVersion=')
+                    options.pluginVersion = version_read("${env.WORKSPACE}\\RPRViewer\\src\\application\\version.py", 'USD_VIEWER_BUILD_VERSION = "')
                     println "[INFO] Updated build version: ${options.pluginVersion}"
 
+                    options.installerVersion = version_read("${env.WORKSPACE}\\RPRViewer\\installer.iss", 'AppVersion=')
+                    println "[INFO] Current installer version: ${options.installerVersion}"
+
+                    // TODO: delete this code
+                    if (options.installerVersion == "1.0") {
+                        options.installerVersion = "1.0.0"
+                        println "[INFO] Updated installer version: ${options.installerVersion}"
+                    }
+
+                    def new_installer_version = version_inc(options.installerVersion, 3)
+                    println "[INFO] New installer version: ${new_installer_version}"
+                    version_write("${env.WORKSPACE}\\RPRViewer\\installer.iss", 'AppVersion=', new_installer_version)
+
                     bat """
-                        git add ${env.WORKSPACE}\\rprplugin_installer.iss
+                        git add ${env.WORKSPACE}\\RPRViewer\\src\\application\\version.py
+                        git add ${env.WORKSPACE}\\RPRViewer\\installer.iss
                         git commit -m "buildmaster: version update to ${options.pluginVersion}"
                         git push origin HEAD:master
                     """
@@ -703,6 +711,20 @@ def executePreBuild(Map options) {
                     options.commitSHA = bat (script: "git log --format=%%H -1 ", returnStdout: true).split('\r\n')[2].trim()
                     options.projectBranch = options.commitSHA
                     println "[INFO] Project branch hash: ${options.projectBranch}"
+
+                    // update RPRViewer submodule in Inventor installer repository
+                    dir("Inst") {
+                        checkoutScm(branchName: "master", repositoryUrl: "git@github.com:Radeon-Pro/RadeonProRenderInventorPluginInstaller.git", submoduleDepth: 1)
+
+                        bat """
+                            cd RPRViewer
+                            git checkout master
+                            cd ..
+                            git add RPRViewer
+                            git commit -m "buildmaster: update RPRViewer submodule to ${options.pluginVersion}"
+                            git push origin HEAD:master
+                        """
+                    }
                 } else {
 
                     if (options.commitMessage.contains("CIS:BUILD")) {
@@ -841,7 +863,6 @@ def executeDeploy(Map options, List platformList, List testResultList) {
 
             List lostStashes = []
             dir("summaryTestResults") {
-                unstashCrashInfo(options['nodeRetry'])
                 testResultList.each {
                     dir("$it".replace("testResult-", "")) {
                         try {
@@ -866,15 +887,15 @@ def executeDeploy(Map options, List platformList, List testResultList) {
             } catch (e) {
                 println "[ERROR] Can't generate number of lost tests"
             }
-
+            
             boolean useTrackedMetrics = (env.JOB_NAME.contains("Weekly") || (env.JOB_NAME.contains("Manual") && (options.testsPackageOriginal == "weekly.json" || options.testsPackageOriginal == "Full.json")))
             boolean saveTrackedMetrics = env.JOB_NAME.contains("Weekly")
-            String metricsRemoteDir = "/volume1/Baselines/TrackedMetrics/USD-InventorPlugin"
+            String metricsRemoteDir = "/volume1/Baselines/TrackedMetrics/USD-Viewer"
 
             if (useTrackedMetrics) {
                 utils.downloadMetrics(this, "summaryTestResults/tracked_metrics", "${metricsRemoteDir}/")
             }
-            
+
             try {
                 GithubNotificator.updateStatus("Deploy", "Building test report", "in_progress", options, NotificationConfiguration.BUILDING_REPORT, "${BUILD_URL}")
                 withEnv(["JOB_STARTED_TIME=${options.JOB_STARTED_TIME}", "BUILD_NAME=${options.baseBuildName}"]) {
@@ -883,7 +904,6 @@ def executeDeploy(Map options, List platformList, List testResultList) {
                         dir("..\\summaryTestResults") {
                             writeJSON file: 'retry_info.json', json: JSONSerializer.toJSON(retryInfo, new JsonConfig()), pretty: 4
                         }
-
                         bat "build_reports.bat ..\\summaryTestResults ${getReportBuildArgs(options)}"
                     }
                 }
@@ -1014,14 +1034,18 @@ def call(String projectBranch = "",
     try {
         withNotifications(options: options, configuration: NotificationConfiguration.INITIALIZATION) {
 
+            if (env.BRANCH_NAME && (env.BRANCH_NAME == "PR-265" || env.BRANCH_NAME == "PR-276" || env.BRANCH_NAME == "PR-277")) {
+                testsBranch = "inemankov/update_render_device"
+            }
+
             Boolean isPreBuilt = customBuildLinkWindows
 
             Integer testStageTimeout
 
-            if (tests.contains("Material_Library") || tests.contains("Inventor_Appearance") || testsPackage.contains("weekly")) {
+            if (tests.contains("Material_Library") || testsPackage.contains("weekly")) {
                 testStageTimeout = 360
             } else {
-                testStageTimeout = 240
+                testStageTimeout = 195
             }
 
             println """
@@ -1037,9 +1061,9 @@ def call(String projectBranch = "",
                         testsBranch: testsBranch,
                         updateRefs: updateRefs,
                         enableNotifications: enableNotifications,
-                        PRJ_NAME: 'USDViewer',
+                        PRJ_NAME: 'StandaloneUSDViewer',
                         PRJ_ROOT: 'rpr-core',
-                        projectRepo: 'git@github.com:Radeon-Pro/RadeonProRenderInventorPluginInstaller.git',
+                        projectRepo: 'git@github.com:Radeon-Pro/RPRViewer.git',
                         BUILDER_TAG: 'BuilderUSDViewer',
                         isPreBuilt:isPreBuilt,
                         TESTER_TAG: tester_tag,
@@ -1047,12 +1071,12 @@ def call(String projectBranch = "",
                         executeBuild: true,
                         executeTests: true,
                         splitTestsExecution: splitTestsExecution,
-                        DEPLOY_FOLDER: "USDViewer",
+                        DEPLOY_FOLDER: "StandaloneUSDViewer",
                         testsPackage: testsPackage,
                         BUILD_TIMEOUT: 120,
                         TEST_TIMEOUT: testStageTimeout,
                         ADDITIONAL_XML_TIMEOUT: 15,
-                        NON_SPLITTED_PACKAGE_TIMEOUT: 240,
+                        NON_SPLITTED_PACKAGE_TIMEOUT: 180,
                         DEPLOY_TIMEOUT: 45,
                         tests: tests,
                         customBuildLinkWindows: customBuildLinkWindows,

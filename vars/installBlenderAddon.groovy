@@ -258,7 +258,7 @@ def uninstallBlenderAddon(String osName, String pluginName, String tool_version,
 def installBlenderAddon(String osName, String pluginName, String tool_version, Map options)
 {
     // Installing Addon in Blender
-    String addonName = options[getProduct.getIdentificatorKey(osName)]
+    String addonName = options[getProduct.getIdentificatorKey(osName, options)]
 
     String addonPath
 

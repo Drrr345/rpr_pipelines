@@ -1,9 +1,9 @@
-def getIdentificatorKey(String osName) {
-    return "plugin${osName}Identificator"
+def getIdentificatorKey(String osName, Map options) {
+    return options.containsKey("buildProfile") ? "plugin${osName}${options.buildProfile}Identificator" : "plugin${osName}Identificator"
 }
 
-def getStashName(String osName) {
-    return "app${osName}"
+def getStashName(String osName, Map options) {
+    return options.containsKey("buildProfile") ? "app${osName}${options.buildProfile}" : "app${osName}"
 }
 
 def saveDownloadedInstaller(String artifactNameBase, String extension, String identificatorValue, Boolean cacheInstaller) {
@@ -36,7 +36,19 @@ def saveDownloadedInstaller(String artifactNameBase, String extension, String id
 def unpack(String unpackDestination, String identificatorKey, String extension, Map options, Boolean cacheInstaller) {
     if (cacheInstaller) {
         if (extension == "tar") {
-            sh("mkdir -p ${unpackDestination}; tar xvf ${CIS_TOOLS}/../PluginsBinaries/${options[identificatorKey]}.${extension} -C ${unpackDestination}")
+            if (isUnix()) {
+                sh("mkdir -p ${unpackDestination}; tar xvf ${CIS_TOOLS}/../PluginsBinaries/${options[identificatorKey]}.${extension} -C ${unpackDestination}")
+            } else {
+                bat("if not exist ${unpackDestination} mkdir ${unpackDestination}")
+                bat("bash.exe -c \"tar -xvf ${CIS_TOOLS.replace('C:\\', '/mnt/c/').replace('\\', '/')}/../PluginsBinaries/${options[identificatorKey]}.${extension} -C ${unpackDestination}\"")
+            }
+        } else if (extension == "tar.gz") {
+            if (isUnix()) {
+                sh("mkdir -p ${unpackDestination}; tar xzf ${CIS_TOOLS}/../PluginsBinaries/${options[identificatorKey]}.${extension} -C ${unpackDestination}")
+            } else {
+                bat("if not exist ${unpackDestination} mkdir ${unpackDestination}")
+                bat("bash.exe -c \"tar -xzf ${CIS_TOOLS.replace('C:\\', '/mnt/c/').replace('\\', '/')}/../PluginsBinaries/${options[identificatorKey]}.${extension} -C ${unpackDestination}\"")
+            }
         } else if (extension == "zip") {
             unzip zipFile: "${CIS_TOOLS}/../PluginsBinaries/${options[identificatorKey]}.${extension}", dir: unpackDestination, quiet: true
         } else {
@@ -44,7 +56,19 @@ def unpack(String unpackDestination, String identificatorKey, String extension, 
         }
     } else {
         if (extension == "tar") {
-            sh("mkdir -p ${unpackDestination}; tar xvf ${options[identificatorKey]}.${extension} -C ${unpackDestination}")
+            if (isUnix()) {
+                sh("mkdir -p ${unpackDestination}; tar xvf ${options[identificatorKey]}.${extension} -C ${unpackDestination}")
+            } else {
+                bat("if not exist ${unpackDestination} mkdir ${unpackDestination}")
+                bat("bash.exe -c \"tar -xvf ${options[identificatorKey]}.${extension} -C ${unpackDestination}\"")
+            }
+        } else if (extension == "tar.gz") {
+            if (isUnix()) {
+                sh("mkdir -p ${unpackDestination}; tar xzf ${options[identificatorKey]}.${extension} -C ${unpackDestination}")
+            } else {
+                bat("if not exist ${unpackDestination} mkdir ${unpackDestination}")
+                bat("bash.exe -c \"tar -xzf ${options[identificatorKey]}.${extension} -C ${unpackDestination}\"")
+            }
         } else if (extension == "zip") {
             unzip zipFile: "${options[identificatorKey]}.${extension}", dir: unpackDestination, quiet: true
         } else {
@@ -59,8 +83,9 @@ def call(String osName, Map options, String unpackDestination = "", Boolean cach
         throw new Exception("Unsupported OS")
     }
 
-    String identificatorKey = getIdentificatorKey(osName)
-    String stashName = getStashName(osName)
+    String identificatorKey = getIdentificatorKey(osName, options)
+    String stashName = getStashName(osName, options)
+
     String extension = options["configuration"]["productExtensions"][osName]
     // the name of the artifact without OS name / version. It must be same for any OS / version
     String artifactNameBase = options["configuration"]["artifactNameBase"]
