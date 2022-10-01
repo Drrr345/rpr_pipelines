@@ -203,7 +203,7 @@ def executeBuildWindows(String osName, Map options) {
         xcopy /s/y/i ..\\RML_thirdparty\\DirectML third_party\\directml
     """
 
-    options.cmakeKeysWin ='-G "Visual Studio 15 2017 Win64" -DRML_DIRECTML=ON -DRML_MIOPEN=ON -DRML_TENSORFLOW_CPU=ON -DRML_TENSORFLOW_CUDA=OFF -DRML_MPS=OFF'
+    options.cmakeKeysWin ='-G "Visual Studio 15 2017 Win64" -DRML_DIRECTML=ON -DRML_TENSORFLOW_CPU=ON -DRML_TENSORFLOW_CUDA=OFF -DRML_MPS=OFF'
 
     String releaseLink = executeWindowsBuildCommand(osName, options, "Release")
     String debugLink = executeWindowsBuildCommand(osName, options, "Debug")
@@ -534,7 +534,7 @@ def executeDeploy(Map options, List platformList, List testResultList) {
 
 def call(String projectBranch = "",
          String testsBranch = "master",
-         String platforms = 'Windows:AMD_RadeonVII,NVIDIA_RTX3080TI,AMD_RX6800XT;Ubuntu20:AMD_RX5700XT;OSX:AMD_RX5700XT;CentOS7;MacOS_ARM:AppleM1',
+         String platforms = 'Windows:AMD_RadeonVII,NVIDIA_RTX3080TI,AMD_RX6800XT;Ubuntu20;OSX:AMD_RX5700XT;CentOS7;MacOS_ARM:AppleM1',
          String projectRepo='git@github.com:Radeon-Pro/RadeonML.git',
          Boolean enableNotifications = true,
          Boolean executeFT = true) {

@@ -72,7 +72,7 @@ def executeTests(String osName, String asicName, Map options) {
         }
 
         withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.DOWNLOAD_BLENDER) {
-            makeUnstash(name: getProduct.getStashName(osName), unzip: false, storeOnNAS: options.storeOnNAS)
+            makeUnstash(name: getProduct.getStashName(osName, options), unzip: false, storeOnNAS: options.storeOnNAS)
             blenderLocation = installBlender(osName, options)
         }
 
@@ -195,9 +195,9 @@ def executeBuild(String osName, Map options) {
 
         String artifactURL = makeArchiveArtifacts(name: packageName, storeOnNAS: options.storeOnNAS)
 
-        makeStash(includes: packageName, name: getProduct.getStashName(osName), preZip: false, storeOnNAS: options.storeOnNAS)
+        makeStash(includes: packageName, name: getProduct.getStashName(osName, options), preZip: false, storeOnNAS: options.storeOnNAS)
 
-        options[getProduct.getIdentificatorKey(osName)] = blenderHash
+        options[getProduct.getIdentificatorKey(osName, options)] = blenderHash
     }
 }
 

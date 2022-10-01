@@ -110,7 +110,6 @@ def executeTestCommand(String asicName, String osName, Map options, String apiVa
 
 
 def executeTestsCustomQuality(String osName, String asicName, Map options, String apiValue = "vulkan") {
-    validateDriver(osName, asicName, ["Ubuntu-NVIDIA": "515.48.07"], options)
        
     cleanWS(osName)
     String error_message = ""
@@ -785,7 +784,7 @@ def executeDeploy(Map options, List platformList, List testResultList) {
 }
 
 def call(String projectBranch = "",
-         String platforms = "Windows:NVIDIA_RTX3080TI,AMD_RX6800XT;Ubuntu20:NVIDIA_RTX2070",
+         String platforms = "Windows:NVIDIA_RTX3080TI,AMD_RX6800XT;Ubuntu20",
          String testsQuality = "none",
          String scenarios = "all",
          Boolean updateRefs = false,
@@ -856,4 +855,8 @@ def call(String projectBranch = "",
                             storeOnNAS: true,
                             finishedBuildStages: new ConcurrentHashMap(),
                             apiValues: apiList])
+
+    if (env.BRANCH_NAME == "master") {
+        build(job: "HybridProMTLX-Auto/master", wait: false)
+    }
 }

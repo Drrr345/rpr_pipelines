@@ -12,12 +12,22 @@ import java.util.concurrent.atomic.AtomicInteger
 @Field final PipelineConfiguration PIPELINE_CONFIGURATION = new PipelineConfiguration(
     supportedOS: ["Windows", "OSX", "Ubuntu18", "Ubuntu20"],
     productExtensions: ["Windows": "zip", "OSX": "zip", "Ubuntu18": "zip", "Ubuntu20": "zip"],
-    artifactNameBase: "binCore"
+    artifactNameBase: "binCore",
+    testProfile: "engine",
+    displayingProfilesMapping: [
+        "engine": [
+            "Northstar64": "Northstar64",
+            "HybridPro": "HybridPro",
+            "Hybrid": "Hybrid",
+            "HIP": "HIP",
+            "HIPvsNS": "HIPvsNS"
+        ]
+    ]
 )
 
 @Field final RPR_SDK_REPO = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonProRenderSDK.git"
 
-Boolean filter(Map options, String asicName, String osName, String testName, String engine) {
+Boolean filter(Map options, String asicName, String osName, String engine) {
     if (osName == "OSX" && engine == "Hybrid") {
         return true
     }
@@ -85,10 +95,7 @@ def executeTestCommand(String osName, String asicName, Map options)
 }
 
 def executeTests(String osName, String asicName, Map options)
-{   
-    options.stageName = options.stageName.replace("--", "-")
-    options.engine = options.engine.split("-")[-1]
-
+{
     // used for mark stash results or not. It needed for not stashing failed tasks which will be retried.
     Boolean stashResults = true
 
@@ -135,7 +142,8 @@ def executeTests(String osName, String asicName, Map options)
             withNotifications(title: options["stageName"], printMessage: true, options: options, configuration: NotificationConfiguration.COPY_BASELINES) {
                 String baseline_dir = isUnix() ? "${CIS_TOOLS}/../TestResources/rpr_core_autotests_baselines" : "/mnt/c/TestResources/rpr_core_autotests_baselines"
                 baseline_dir = enginePostfix ? "${baseline_dir}-${enginePostfix}" : baseline_dir
-                println "[INFO] Downloading reference images for ${options.tests}"
+                println "[INFO] Downloading reference images for ${options.tests}-${options.engine}"
+
                 options.tests.split(" ").each() {
                     downloadFiles("${REF_PATH_PROFILE}/${it}", baseline_dir)
                 }
@@ -212,17 +220,7 @@ def executeTests(String osName, String asicName, Map options)
                         if (sessionReport.summary.total == sessionReport.summary.error + sessionReport.summary.skipped || sessionReport.summary.total == 0) {
                             // check that group isn't fully skipped
                             if (sessionReport.summary.total != sessionReport.summary.skipped || sessionReport.summary.total == 0){
-                                // remove brocken core package
                                 removeInstaller(osName: osName, options: options, extension: "zip")
-                                collectCrashInfo(osName, options, options.currentTry)
-                                if (osName.contains("Ubuntu")) {
-                                    sh """
-                                        echo "Restarting Unix Machine...."
-                                        hostname
-                                        (sleep 3; sudo shutdown -r now) &
-                                    """
-                                    sleep(60)
-                                }
                                 String errorMessage
                                 if (options.currentTry < options.nodeReallocateTries) {
                                     errorMessage = "All tests were marked as error. The test group will be restarted."
@@ -267,14 +265,14 @@ def executeBuildWindows(Map options) {
 
             artifactURL = makeArchiveArtifacts(name: ARTIFACT_NAME, storeOnNAS: options.storeOnNAS)
 
-            makeStash(includes: ARTIFACT_NAME, name: getProduct.getStashName("Windows"), preZip: false, storeOnNAS: options.storeOnNAS)
+            makeStash(includes: ARTIFACT_NAME, name: getProduct.getStashName("Windows", options), preZip: false, storeOnNAS: options.storeOnNAS)
         }
     }
 
     if (env.BRANCH_NAME == "master") {
         withNotifications(title: "Windows", options: options, configuration: NotificationConfiguration.UPDATE_BINARIES) {
 
-            hybrid_vs_northstar_pipeline.updateBinaries(
+            hybrid_vs_northstar.updateBinaries(
                 newBinaryFile: "RadeonProRenderSDK\\RadeonProRender\\binWin64\\Northstar64.dll", 
                 targetFileName: "Northstar64.dll", osName: "Windows", compareChecksum: true
             )
@@ -297,7 +295,7 @@ def executeBuildOSX(Map options) {
 
             artifactURL = makeArchiveArtifacts(name: ARTIFACT_NAME, storeOnNAS: options.storeOnNAS)
 
-            makeStash(includes: ARTIFACT_NAME, name: getProduct.getStashName("OSX"), preZip: false, storeOnNAS: options.storeOnNAS)
+            makeStash(includes: ARTIFACT_NAME, name: getProduct.getStashName("OSX", options), preZip: false, storeOnNAS: options.storeOnNAS)
         }
     }
 
@@ -317,7 +315,7 @@ def executeBuildLinux(String osName, Map options) {
 
             artifactURL = makeArchiveArtifacts(name: ARTIFACT_NAME, storeOnNAS: options.storeOnNAS)
 
-            makeStash(includes: ARTIFACT_NAME, name: getProduct.getStashName(osName), preZip: false, storeOnNAS: options.storeOnNAS)
+            makeStash(includes: ARTIFACT_NAME, name: getProduct.getStashName(osName, options), preZip: false, storeOnNAS: options.storeOnNAS)
         }
     }
 
@@ -346,7 +344,7 @@ def executeBuild(String osName, Map options)
             }
         }
 
-        options[getProduct.getIdentificatorKey(osName)] = options.commitSHA
+        options[getProduct.getIdentificatorKey(osName, options)] = options.commitSHA
     } catch (e) {
         throw e
     } finally {
@@ -420,9 +418,6 @@ def executePreBuild(Map options) {
         }
     }
 
-
-    def tests = []
-
     withNotifications(title: "Jenkins build configuration", options: options, configuration: NotificationConfiguration.CONFIGURE_TESTS) {
         dir('jobs_test_core') {
             checkoutScm(branchName: options.testsBranch, repositoryUrl: options.testRepo)
@@ -433,36 +428,36 @@ def executePreBuild(Map options) {
             println("[INFO] Test branch hash: ${options['testsBranch']}")
 
             if (options.testsPackage != "none") {
+                def tests = []
                 // json means custom test suite. Split doesn't supported
                 def tempTests = readJSON file: "jobs/${options.testsPackage}"
                 tempTests["groups"].each() {
                     // TODO: fix: duck tape - error with line ending
                     tests << it.key
                 }
-                options.tests = tests
+
                 options.testsPackage = "none"
-            } else {
-                options.tests.split(" ").each() {
-                    tests << "${it}"
-                }
-                options.tests = tests
+                options.tests = tests.join(" ")          
             }
 
             options.testsList = []
-            options.tests = tests.join(" ")
+
             options.engines.each(){ engine ->
-                options.testsList << "-${engine}"
+                options.testsList << "${engine}"
             }
         }
-
-        if (env.BRANCH_NAME && options.githubNotificator) {
-            options.githubNotificator.initChecks(options, "${BUILD_URL}")
-        }
     }
+
+    // make lists of raw profiles and lists of beautified profiles (displaying profiles)
+    multiplatform_pipeline.initProfiles(options)
 
     if (options.flexibleUpdates && multiplatform_pipeline.shouldExecuteDelpoyStage(options)) {
         options.reportUpdater = new ReportUpdater(this, env, options)
         options.reportUpdater.init(this.&getReportBuildArgs)
+    }
+
+    if (env.BRANCH_NAME && options.githubNotificator) {
+        options.githubNotificator.initChecks(options, "${BUILD_URL}")
     }
 }
 
@@ -472,7 +467,7 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
     cleanWS()
     try {
         if (options['executeTests'] && testResultList) {
-            String engineName = options.enginesNames[options.engines.indexOf(engine)]
+            String engineName = options.displayingTestProfiles[engine]
 
             withNotifications(title: "Building test report for ${engineName} engine", options: options, startUrl: "${BUILD_URL}", configuration: NotificationConfiguration.DOWNLOAD_TESTS_REPO) {
                 checkoutScm(branchName: options.testsBranch, repositoryUrl: options.testRepo)
@@ -481,13 +476,12 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
             List lostStashes = []
 
             dir("summaryTestResults") {
-                unstashCrashInfo(options['nodeRetry'], engine)
                 testResultList.each() {
                     if (it.endsWith(engine)) {
                         List testNameParts = it.replace("testResult-", "").split("-") as List
                         String testName = testNameParts.subList(0, testNameParts.size() - 1).join("-")
 
-                        if (filter(options, testNameParts.get(0), testNameParts.get(1), testNameParts.get(2), engine)) {
+                        if (filter(options, testNameParts.get(0), testNameParts.get(1), engine)) {
                             return
                         }
 
@@ -616,11 +610,11 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
             }
 
             try {
-                options['testsStatus-' + engine] = readFile("summaryTestResults/slack_status.json")
+                options['testsStatus-' + engineName] = readFile("summaryTestResults/slack_status.json")
             } catch(e) {
                 println(e.toString())
                 println(e.getMessage())
-                options['testsStatus-' + engine] = ""
+                options['testsStatus-' + engineName] = ""
             }
 
             withNotifications(title: "Building test report", options: options, configuration: NotificationConfiguration.PUBLISH_REPORT) {
@@ -656,7 +650,7 @@ def appendPlatform(String filteredPlatforms, String platform) {
 
 def call(String projectBranch = "",
          String testsBranch = "master",
-         String platforms = 'Windows:AMD_WX9100,AMD_RadeonVII,AMD_RX5700XT,NVIDIA_RTX3080TI,AMD_RX6800XT;OSX:AMD_RX5700XT,AppleM1;Ubuntu20:AMD_RX5700XT',
+         String platforms = 'Windows:AMD_RadeonVII,NVIDIA_RTX3080TI,AMD_RX6800XT;OSX:AMD_RX5700XT,AppleM1;Ubuntu20',
          String updateRefs = 'No',
          Boolean enableNotifications = true,
          String renderDevice = "gpu",
@@ -773,7 +767,6 @@ def call(String projectBranch = "",
                         executeTests:true,
                         reportName:'Test_20Report',
                         engines:enginesNames,
-                        enginesNames:enginesNames,
                         TEST_TIMEOUT:180,
                         DEPLOY_TIMEOUT:30,
                         width:width,

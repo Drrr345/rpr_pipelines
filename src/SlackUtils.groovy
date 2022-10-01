@@ -125,9 +125,9 @@ class SlackUtils {
         String HTML_REPORT_LINK = options.reportName ? "${context.env.BUILD_URL}${options.reportName}" : ''
 
         List reports = []
-        if (options.engines) {
-            options.engines.each { engine ->
-                reports << "${engine}"
+        if (options.containsKey("testProfiles")) {
+            options.testProfiles.each { profile ->
+                reports << "${profile}"
             }
         } else {
             if (options['testsStatus']) {
@@ -151,7 +151,14 @@ class SlackUtils {
         ]]
 
         for (int i = 0; i < reports.size(); i++) {
-            String pretext = reports[i] ? options.enginesNames[i] : ""
+            String pretext
+
+            if (reports[i]) {
+                pretext = options.containsKey("displayingProfilesMapping") ? options["displayingProfilesMapping"][reports[i]] : ""
+            } else {
+                pretext = ""
+            }
+
             String text = reports[i] ? options['testsStatus-' + reports[i]] : options['testsStatus']
 
             attachments << [

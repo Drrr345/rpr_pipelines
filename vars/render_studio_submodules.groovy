@@ -12,6 +12,7 @@ def call(String projectName, String projectRepo) {
                 
                 switch(env.BRANCH_NAME) {
                     case "master":
+                    case "main":
                         version = version_inc(version, 2)
                         break
                     case "develop":

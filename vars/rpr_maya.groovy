@@ -13,7 +13,19 @@ import org.jenkinsci.plugins.workflow.steps.FlowInterruptedException
 @Field final PipelineConfiguration PIPELINE_CONFIGURATION = new PipelineConfiguration(
     supportedOS: ["Windows", "OSX"],
     productExtensions: ["Windows": "msi", "OSX": "dmg"],
-    artifactNameBase: "RadeonProRender"
+    artifactNameBase: "RadeonProRender",
+    testProfile: "engine",
+    displayingProfilesMapping: [
+        "engine": [
+            "Northstar": "Northstar",
+            "HybridPro": "HybridPro",
+            "HIP": "HIP",
+            "HIPvsNS": "HIPvsNS",
+            "HybridLow": "HybridLow",
+            "HybridMedium": "HybridMedium",
+            "HybridHigh": "HybridHigh"
+        ]
+    ]
 )
 
 
@@ -98,18 +110,23 @@ def buildRenderCache(String osName, String toolVersion, String log_name, Integer
 
 def executeTestCommand(String osName, String asicName, Map options)
 {
-    def testTimeout = options.timeouts["${options.parsedTests}"]
-    String testsNames = options.parsedTests
-    String testsPackageName = options.testsPackage
+    def testTimeout = options.timeouts["${options.tests}"]
+    String testsNames
+    String testsPackageName
+
     if (options.testsPackage != "none" && !options.isPackageSplitted) {
-        if (options.parsedTests.contains(".json")) {
+        if (options.tests.contains(".json")) {
             // if tests package isn't splitted and it's execution of this package - replace test package by test group and test group by empty string
-            testsPackageName = options.parsedTests
+            testsPackageName = options.tests
             testsNames = ""
         } else {
             // if tests package isn't splitted and it isn't execution of this package - replace tests package by empty string
             testsPackageName = "none"
+            testsNames = options.tests
         }
+    } else {
+        testsPackageName = "none"
+        testsNames = options.tests
     }
 
     println "Set timeout to ${testTimeout}"
@@ -142,12 +159,12 @@ def executeTestCommand(String osName, String asicName, Map options)
 def cloneTestsRepository(Map options) {
     checkoutScm(branchName: options.testsBranch, repositoryUrl: options.testRepo)
 
-    if (options.parsedTests.contains("RPR_Export") || options.parsedTests.contains("regression.0")) {
+    if (options.tests.contains("RPR_Export") || options.tests.contains("regression.0")) {
         dir("RadeonProRenderSDK") {
             if (options["isPreBuilt"]) {
-                checkoutScm(branchName: "master", repositoryUrl: rpr_core_pipeline.RPR_SDK_REPO)
+                checkoutScm(branchName: "master", repositoryUrl: rpr_sdk.RPR_SDK_REPO)
             } else {
-                checkoutScm(branchName: options.rprsdkCommitSHA, repositoryUrl: rpr_core_pipeline.RPR_SDK_REPO)
+                checkoutScm(branchName: options.rprsdkCommitSHA, repositoryUrl: rpr_sdk.RPR_SDK_REPO)
             }
         }
     }
@@ -156,9 +173,6 @@ def cloneTestsRepository(Map options) {
 
 def executeTests(String osName, String asicName, Map options)
 {
-    options.parsedTests = options.tests.split("-")[0]
-    options.engine = options.tests.split("-")[1]
-
     // used for mark stash results or not. It needed for not stashing failed tasks which will be retried.
     Boolean stashResults = true
     
@@ -166,16 +180,6 @@ def executeTests(String osName, String asicName, Map options)
         // FIXME: too many random errors on Maya on Mac machines
         if (osName == "OSX") {
             utils.reboot(this, osName)
-        }
-
-        // FIXME: remove this ducktape when CPUs on that machines will be changes
-        if (env.NODE_NAME == "PC-TESTER-MILAN-WIN10") {
-            if (options.parsedTests.contains("VDB") || options.parsedTests.contains("regression.2")) {
-                throw new ExpectedExceptionWrapper(
-                    "System doesn't support VDB group", 
-                    new Exception("System doesn't support VDB group")
-                )
-            }
         }
 
         withNotifications(title: options["stageName"], options: options, logUrl: "${BUILD_URL}", configuration: NotificationConfiguration.DOWNLOAD_TESTS_REPO) {
@@ -214,7 +218,7 @@ def executeTests(String osName, String asicName, Map options)
             Boolean newPluginInstalled = false
             withNotifications(title: options["stageName"], options: options, configuration: NotificationConfiguration.INSTALL_PLUGIN) {
                 timeout(time: "15", unit: "MINUTES") {
-                    rpr_mayausd_pipeline.uninstallRPRMayaUSDPlugin(osName, options)
+                    usd_maya.uninstallRPRMayaUSDPlugin(osName, options)
                 }
 
                 timeout(time: "15", unit: "MINUTES") {
@@ -256,13 +260,16 @@ def executeTests(String osName, String asicName, Map options)
             case 'HIPvsNS':
                 enginePostfix = "NorthStar"
                 break
-            case 'Hybrid_Low':
+            case 'HybridPro':
+                enginePostfix = "HybridPro"
+                break
+            case 'HybridLow':
                 enginePostfix = "HybridLow"
                 break
-            case 'Hybrid_Medium':
+            case 'HybridMedium':
                 enginePostfix = "HybridMedium"
                 break
-            case 'Hybrid_High':
+            case 'HybridHigh':
                 enginePostfix = "HybridHigh"
                 break
             case 'HIP':
@@ -293,8 +300,9 @@ def executeTests(String osName, String asicName, Map options)
             withNotifications(title: options["stageName"], printMessage: true, options: options, configuration: NotificationConfiguration.COPY_BASELINES) {
                 String baseline_dir = isUnix() ? "${CIS_TOOLS}/../TestResources/rpr_maya_autotests_baselines" : "/mnt/c/TestResources/rpr_maya_autotests_baselines"
                 baseline_dir = enginePostfix ? "${baseline_dir}-${enginePostfix}" : baseline_dir
-                println "[INFO] Downloading reference images for ${options.parsedTests}"
-                options.parsedTests.split(" ").each() {
+                println "[INFO] Downloading reference images for ${options.tests}-${options.engine}"
+
+                options.tests.split(" ").each() {
                     if (it.contains(".json")) {
                         downloadFiles("${REF_PATH_PROFILE}/", baseline_dir)
                     } else {
@@ -390,9 +398,7 @@ def executeTests(String osName, String asicName, Map options)
                         if (sessionReport.summary.total == sessionReport.summary.error + sessionReport.summary.skipped || sessionReport.summary.total == 0) {
                             // check that group isn't fully skipped
                             if (sessionReport.summary.total != sessionReport.summary.skipped || sessionReport.summary.total == 0){
-                                collectCrashInfo(osName, options, options.currentTry)
                                 installMSIPlugin(osName, "Maya", options, false, true)
-                                // remove installer of broken addon
                                 removeInstaller(osName: osName, options: options)
                                 String errorMessage
                                 if (options.currentTry < options.nodeReallocateTries) {
@@ -429,7 +435,7 @@ def executeTests(String osName, String asicName, Map options)
                     }
                 }
             } else {
-                println "[INFO] Task ${options.tests} will be retried."
+                println "[INFO] Task ${options.tests}-${options.engine} on ${options.nodeLabels} labels will be retried."
             }
         } catch (e) {
             // throw exception in finally block only if test stage was finished
@@ -476,11 +482,11 @@ def executeBuildWindows(Map options)
         """
 
         // FIXME: hot fix for STVCIS-1215
-        options[getProduct.getIdentificatorKey("Windows")] = python3("getMsiProductCode.py").split('\r\n')[2].trim()[1..-2]
+        options[getProduct.getIdentificatorKey("Windows", options)] = python3("getMsiProductCode.py").split('\r\n')[2].trim()[1..-2]
 
         println "[INFO] Built MSI product code: ${options.productCode}"
 
-        makeStash(includes: 'RadeonProRenderMaya.msi', name: getProduct.getStashName("Windows"), preZip: false, storeOnNAS: options.storeOnNAS)
+        makeStash(includes: 'RadeonProRenderMaya.msi', name: getProduct.getStashName("Windows", options), preZip: false, storeOnNAS: options.storeOnNAS)
 
         GithubNotificator.updateStatus("Build", "Windows", "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
     }
@@ -505,10 +511,10 @@ def executeBuildOSX(Map options)
             String artifactURL = makeArchiveArtifacts(name: ARTIFACT_NAME, storeOnNAS: options.storeOnNAS)
 
             sh "cp RadeonProRender*.dmg RadeonProRenderMaya.dmg"
-            makeStash(includes: 'RadeonProRenderMaya.dmg', name: getProduct.getStashName("OSX"), preZip: false, storeOnNAS: options.storeOnNAS)
+            makeStash(includes: 'RadeonProRenderMaya.dmg', name: getProduct.getStashName("OSX", options), preZip: false, storeOnNAS: options.storeOnNAS)
 
             // TODO: detect ID of installed plugin
-            options[getProduct.getIdentificatorKey("OSX")] = options.commitSHA
+            options[getProduct.getIdentificatorKey("OSX", options)] = options.commitSHA
 
             GithubNotificator.updateStatus("Build", "OSX", "success", options, NotificationConfiguration.BUILD_SOURCE_CODE_END_MESSAGE, artifactURL)
         }
@@ -558,8 +564,8 @@ def getReportBuildArgs(String engineName, Map options) {
 
 def executePreBuild(Map options)
 {
-    if (env.BRANCH_NAME && env.BRANCH_NAME.contains("PR-208")) {
-        options.toolVersion = "2022"
+    if (env.BRANCH_NAME && env.BRANCH_NAME.contains("PR-333")) {
+        options.toolVersion = "2023"
     }
 
     // manual job with prebuilt plugin
@@ -798,18 +804,21 @@ def executePreBuild(Map options)
             options.tests = tests
         }
 
-        if (env.BRANCH_NAME && options.githubNotificator) {
-            options.githubNotificator.initChecks(options, "${BUILD_URL}")
-        }
-
         options.testsList = options.tests
 
         println "timeouts: ${options.timeouts}"
     }
 
+    // make lists of raw profiles and lists of beautified profiles (displaying profiles)
+    multiplatform_pipeline.initProfiles(options)
+
     if (options.flexibleUpdates && multiplatform_pipeline.shouldExecuteDelpoyStage(options)) {
         options.reportUpdater = new ReportUpdater(this, env, options)
         options.reportUpdater.init(this.&getReportBuildArgs)
+    }
+
+    if (env.BRANCH_NAME && options.githubNotificator) {
+        options.githubNotificator.initChecks(options, "${BUILD_URL}")
     }
 }
 
@@ -817,7 +826,7 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
 {
     cleanWS()
     try {
-        String engineName = options.enginesNames[options.engines.indexOf(engine)]
+        String engineName = options.displayingTestProfiles[engine]
 
         if (options['executeTests'] && testResultList) {
             withNotifications(title: "Building test report for ${engineName}", options: options, startUrl: "${BUILD_URL}", configuration: NotificationConfiguration.DOWNLOAD_TESTS_REPO) {
@@ -827,7 +836,6 @@ def executeDeploy(Map options, List platformList, List testResultList, String en
             List lostStashes = []
 
             dir("summaryTestResults") {
-                unstashCrashInfo(options['nodeRetry'], engine)
                 testResultList.each() {
                     if (it.endsWith(engine)) {
                         List testNameParts = it.replace("testResult-", "").split("-") as List
@@ -1027,7 +1035,7 @@ def appendPlatform(String filteredPlatforms, String platform) {
 def call(String projectRepo = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonProRenderMayaPlugin.git",
         String projectBranch = "",
         String testsBranch = "master",
-        String platforms = 'Windows:AMD_WX9100,NVIDIA_RTX3080TI,AMD_RadeonVII,AMD_RX5700XT,AMD_RX6800XT;OSX:AMD_RX5700XT',
+        String platforms = 'Windows:NVIDIA_RTX3080TI,AMD_RadeonVII,AMD_RX6800XT;OSX:AMD_RX5700XT',
         String updateRefs = 'No',
         Boolean enableNotifications = true,
         Boolean incrementVersion = true,
@@ -1170,7 +1178,6 @@ def call(String projectRepo = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonPro
                         customBuildLinkWindows: customBuildLinkWindows,
                         customBuildLinkOSX: customBuildLinkOSX,
                         engines: formattedEngines,
-                        enginesNames:enginesNames,
                         nodeRetry: nodeRetry,
                         errorsInSuccession: errorsInSuccession,
                         problemMessageManager: problemMessageManager,

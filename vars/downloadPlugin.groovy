@@ -59,11 +59,11 @@ def call(String osName, Map options, String credentialsId = '', Integer oneTryTi
 
     if (customBuildLink.startsWith("https://builds.rpr")) {
         withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: 'builsRPRCredentials', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]) {
-            runCurl("curl -L -o ${artifactNameBase}_${osName}.${extension} -u $USERNAME:$PASSWORD \"${customBuildLink}\"", 5, oneTryTimeout)
+            runCurl("curl --insecure -L -o ${artifactNameBase}_${osName}.${extension} -u $USERNAME:$PASSWORD \"${customBuildLink}\"", 5, oneTryTimeout)
         }
     } else if (customBuildLink.startsWith("https://rpr.cis")) {
         withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: 'jenkinsCredentials', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]) {
-            runCurl("curl -L -o ${artifactNameBase}_${osName}.${extension} -u $USERNAME:$PASSWORD \"${customBuildLink}\"", 5, oneTryTimeout)
+            runCurl("curl --insecure -L -o ${artifactNameBase}_${osName}.${extension} -u $USERNAME:$PASSWORD \"${customBuildLink}\"", 5, oneTryTimeout)
         }
     } else if (customBuildLink.startsWith("/CIS/")) {
         downloadFiles("/volume1${customBuildLink}", ".")
@@ -77,14 +77,14 @@ def call(String osName, Map options, String credentialsId = '', Integer oneTryTi
             """
         }
     } else if (customBuildLink.contains("cis.nas")) {
-        runCurl("curl -L -o ${artifactNameBase}_${osName}.${extension} \"${customBuildLink}\"", 5, oneTryTimeout)
+        runCurl("curl --insecure -L -o ${artifactNameBase}_${osName}.${extension} \"${customBuildLink}\"", 5, oneTryTimeout)
     } else {
         if (credentialsId) {
             withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: credentialsId, usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]) {
                 runCurl("curl -L -o ${artifactNameBase}_${osName}.${extension} -u $USERNAME:$PASSWORD \"${customBuildLink}\"", 5, oneTryTimeout)
             }
         } else {
-            runCurl("curl -L -o ${artifactNameBase}_${osName}.${extension} \"${customBuildLink}\"", 5, oneTryTimeout)
+            runCurl("curl --insecure -L -o ${artifactNameBase}_${osName}.${extension} \"${customBuildLink}\"", 5, oneTryTimeout)
         }
     }
 
@@ -94,5 +94,5 @@ def call(String osName, Map options, String credentialsId = '', Integer oneTryTi
     def pluginSha = sha1 "${artifactNameBase}_${osName}.${extension}"
     println "Downloaded plugin sha1: ${pluginSha}"
 
-    options[getProduct.getIdentificatorKey(osName)] = pluginSha
+    options[getProduct.getIdentificatorKey(osName, options)] = pluginSha
 }

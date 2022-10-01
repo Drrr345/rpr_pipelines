@@ -6,6 +6,9 @@ public class PipelineConfiguration {
     List supportedOS
     Map productExtensions
     String artifactNameBase
+    String buildProfile
+    String testProfile
+    Map displayingProfilesMapping
 
     /**
      * Main constructor
@@ -18,6 +21,18 @@ public class PipelineConfiguration {
         this.supportedOS = params["supportedOS"]
         this.productExtensions = params["productExtensions"]
         this.artifactNameBase = params["artifactNameBase"]
+
+        if (params.containsKey("buildProfile")) {
+            this.buildProfile = params["buildProfile"]
+        }
+
+        if (params.containsKey("testProfile")) {
+            this.testProfile = params["testProfile"]
+        }
+
+        if (params.containsKey("displayingProfilesMapping")) {
+            this.displayingProfilesMapping = params["displayingProfilesMapping"]
+        }
     }
 
 }
