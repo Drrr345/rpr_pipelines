@@ -563,7 +563,7 @@ def executeTestsClient(String osName, String asicName, Map options) {
     try {
 
         //utils.reboot(this, osName)
-        load("amdDriverUpdate.groovy").updateDriver(options, osName, "${it}")
+        utils.updateDriver(options, osName, "${it}")
 
         timeout(time: "10", unit: "MINUTES") {
             cleanWS(osName)
@@ -651,7 +651,7 @@ def executeTestsServer(String osName, String asicName, Map options) {
 
     try {
         //utils.reboot(this, osName)
-        load("amdDriverUpdate.groovy").updateDriver(options, osName, "${it}")
+        utils.updateDriver(options, osName, "${it}")
 
         withNotifications(title: options["stageName"], options: options, logUrl: "${BUILD_URL}", configuration: NotificationConfiguration.DOWNLOAD_TESTS_REPO) {
             timeout(time: "10", unit: "MINUTES") {
@@ -764,7 +764,7 @@ def executeTestsMulticonnectionClient(String osName, String asicName, Map option
     Boolean stashResults = true
 
     try {
-        load("amdDriverUpdate.groovy").updateDriver(options, osName, "${it}")
+        utils.updateDriver(options, osName, "${it}")
         
         timeout(time: "10", unit: "MINUTES") {
             cleanWS(osName)
