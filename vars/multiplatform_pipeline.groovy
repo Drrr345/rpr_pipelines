@@ -116,12 +116,12 @@ def executeTestsNode(String osName, String gpuNames, String buildProfile, def ex
                     if (options.TESTER_TAG) {
                         if (options.TESTER_TAG.contains("PC-") || options.TESTER_TAG.contains("LC-")) {
                             // possibility to test some disabled tester machine
-                            testerLabels = "${osName} && ${options.TESTER_TAG} && gpu${asicName}"
+                            testerLabels = "PC-TESTER-SEUL-WIN10"
                         } else {
-                            testerLabels = "${osName} && ${options.TESTER_TAG} && gpu${asicName} && !Disabled"
+                            testerLabels = "PC-TESTER-SEUL-WIN10"
                         }
                     } else {
-                        testerLabels = "${osName} && Tester && gpu${asicName} && !Disabled"
+                        testerLabels = "PC-TESTER-SEUL-WIN10"
                     }
 
                     testsList.removeAll({buildProfile && !doesProfilesCorrespond(buildProfile, it.split("-")[-1])})
@@ -359,7 +359,7 @@ def executePlatform(String osName, String gpuNames, String buildProfile, def exe
                     String stageName = buildProfile ? "Build-${osName}-${buildProfile}" : "Build-${osName}"
 
                     stage(stageName) {
-                        def builderLabels = "${osName} && ${options.BUILDER_TAG}"
+                        def builderLabels = "PC-TESTER-SEUL-WIN10"
                         def retringFunction = { nodesList, currentTry ->
                             executeBuild(osName, options)
                         }
