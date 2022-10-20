@@ -359,7 +359,7 @@ def executePlatform(String osName, String gpuNames, String buildProfile, def exe
                     String stageName = buildProfile ? "Build-${osName}-${buildProfile}" : "Build-${osName}"
 
                     stage(stageName) {
-                        def builderLabels = "${osName} && ${options.BUILDER_TAG}"
+                        def builderLabels = "${osName} && testBuilder"
                         def retringFunction = { nodesList, currentTry ->
                             executeBuild(osName, options)
                         }
