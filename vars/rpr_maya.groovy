@@ -187,9 +187,9 @@ def executeTests(String osName, String asicName, Map options)
                 try {
                     if (osName == "OSX" && asicName == "AppleM1") {
                         sh """
-                            pkill -f /Applications/Autodesk/maya2023/Maya.app/Contents/MacOS/Maya; sleep 1; pkill -f /Applications/Autodesk/maya2023/Maya.app/Contents/MacOS/Maya
                             pkill -f /Applications/Autodesk/maya2022/Maya.app/Contents/MacOS/Maya; sleep 1; pkill -f /Applications/Autodesk/maya2022/Maya.app/Contents/MacOS/Maya
                             pkill -f /Applications/Autodesk/maya2020/Maya.app/Contents/MacOS/Maya; sleep 1; pkill -f /Applications/Autodesk/maya2020/Maya.app/Contents/MacOS/Maya
+                            pkill -f /Applications/Autodesk/maya2019/Maya.app/Contents/MacOS/Maya; sleep 1; pkill -f /Applications/Autodesk/maya2019/Maya.app/Contents/MacOS/Maya
                         """
                     }
                 } catch (e) {
@@ -1042,7 +1042,7 @@ def call(String projectRepo = "git@github.com:GPUOpen-LibrariesAndSDKs/RadeonPro
         String renderDevice = "gpu",
         String testsPackage = "",
         String tests = "",
-        String toolVersion = "2023",
+        String toolVersion = "2022",
         Boolean forceBuild = false,
         Boolean splitTestsExecution = true,
         String resX = '0',
